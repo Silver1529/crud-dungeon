@@ -5,11 +5,7 @@
 // Você vê o SQL antes (preview) e depois (no painel CRUD Live à direita).
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import {
-  Hammer, Wrench, Trash2, Server, Database, Zap, Network,
-  Sparkles, BookOpen, ChevronRight, Keyboard,
-} from 'lucide-react';
-import type { ComponentType } from 'react';
+import { Sparkles, BookOpen, ChevronRight, Keyboard } from 'lucide-react';
 import { useGameStore } from '@/lib/store';
 import {
   useObjetos,
@@ -18,111 +14,19 @@ import {
   useDeleteObjeto,
 } from '@/lib/queries';
 import { notifyApi } from './ui/Toast';
-
-// ============================================================================
-// Types
-// ============================================================================
-type Tipo = 'servidor' | 'banco' | 'cache' | 'router';
-type Tool = 'build' | 'upgrade' | 'delete';
-type Status = 'novo' | 'ativo' | 'upgrade' | 'critico';
-
-interface Objeto {
-  id: number | string;
-  tipo: Tipo;
-  status: Status;
-  pos_x: number;
-  pos_y: number;
-}
-
-interface FacingTile {
-  x: number;
-  y: number;
-}
-
-// "Any" para o instance kaplay porque os tipos completos são grandes; o resto
-// do componente é tipado com rigor.
-type K = any;
-
-// ============================================================================
-// Constants
-// ============================================================================
-const TILE = 48;
-const COLS = 20;
-const ROWS = 15;
-const W = COLS * TILE;
-const H = ROWS * TILE;
-
-const TIPO_META: Record<Tipo, { color: [number, number, number]; label: string; icon: ComponentType<{ className?: string }> }> = {
-  servidor: { color: [34, 211, 238], label: 'servidor', icon: Server },
-  banco: { color: [167, 139, 250], label: 'banco', icon: Database },
-  cache: { color: [251, 191, 36], label: 'cache', icon: Zap },
-  router: { color: [16, 185, 129], label: 'router', icon: Network },
-};
-
-const STATUS_META: Record<Status, { color: [number, number, number]; label: string }> = {
-  novo: { color: [148, 163, 184], label: 'novo' },
-  ativo: { color: [34, 197, 94], label: 'ativo' },
-  upgrade: { color: [234, 179, 8], label: 'upgrade' },
-  critico: { color: [239, 68, 68], label: 'critico' },
-};
-
-const STATUS_NEXT: Record<Status, Status> = {
-  novo: 'ativo',
-  ativo: 'upgrade',
-  upgrade: 'critico',
-  critico: 'novo',
-};
-
-const TOOL_META: Record<Tool, {
-  label: string;
-  icon: ComponentType<{ className?: string }>;
-  verb: 'POST' | 'PUT' | 'DELETE';
-  sqlKeyword: 'INSERT' | 'UPDATE' | 'DELETE';
-  color: 'emerald' | 'amber' | 'rose';
-  hint: string;
-}> = {
-  build: { label: 'BUILD', icon: Hammer, verb: 'POST', sqlKeyword: 'INSERT', color: 'emerald', hint: 'Criar novo registro no banco (CREATE)' },
-  upgrade: { label: 'UPGRADE', icon: Wrench, verb: 'PUT', sqlKeyword: 'UPDATE', color: 'amber', hint: 'Modificar status de um registro existente (UPDATE)' },
-  delete: { label: 'DELETE', icon: Trash2, verb: 'DELETE', sqlKeyword: 'DELETE', color: 'rose', hint: 'Apagar registro do banco (DELETE)' },
-};
-
-const COLOR_MAP = {
-  emerald: { ring: 'border-emerald-400/40', bg: 'bg-emerald-400/10', fg: 'text-emerald-300' },
-  amber: { ring: 'border-amber-400/40', bg: 'bg-amber-400/10', fg: 'text-amber-300' },
-  rose: { ring: 'border-rose-400/40', bg: 'bg-rose-400/10', fg: 'text-rose-300' },
-  cyan: { ring: 'border-cyan-400/40', bg: 'bg-cyan-400/10', fg: 'text-cyan-300' },
-  violet: { ring: 'border-violet-400/40', bg: 'bg-violet-400/10', fg: 'text-violet-300' },
-} as const;
-
-// ============================================================================
-// SQL preview (lê o que SERÁ executado se o jogador apertar Espaço agora)
-// ============================================================================
-function buildSqlPreview(tool: Tool, tipo: Tipo, fx: number, fy: number, target: Objeto | null): string {
-  if (fx === 0 && fy === 0) {
-    return `SELECT id, tipo, status, pos_x, pos_y\nFROM game_objects\nORDER BY id ASC;`;
-  }
-  if (tool === 'build') {
-    if (target) return `-- tile ocupado · BUILD não roda (id=${target.id} já existe em ${fx},${fy})`;
-    return `INSERT INTO game_objects (tipo, status, pos_x, pos_y)\nVALUES ('${tipo}', 'novo', ${fx}, ${fy});`;
-  }
-  if (tool === 'upgrade') {
-    if (!target) return `-- vazio · UPGRADE precisa de um objeto na sua frente`;
-    return `UPDATE game_objects\nSET status = '${STATUS_NEXT[target.status]}'\nWHERE id = ${target.id};`;
-  }
-  if (!target) return `-- vazio · DELETE precisa de um objeto na sua frente`;
-  return `DELETE FROM game_objects\nWHERE id = ${target.id};`;
-}
+import {
+  type Tipo, type Tool, type Status, type Direction, type Objeto, type FacingTile, type K,
+  type PlayerCustom, type ShirtKey, type HatKey, type SkinKey,
+  type TutStep, type ActiveTutStep,
+  TILE, COLS, ROWS, W, H,
+  TIPO_META, STATUS_META, STATUS_NEXT, STATUS_LEVEL, TOOL_META, COLOR_MAP, PLAYER_PRESETS,
+  USER_NAME_KEY, TUTORIAL_DONE_KEY, PLAYER_CUSTOM_KEY,
+} from '@/lib/game/constants';
+import { buildSqlPreview, highlightSql } from '@/lib/game/sql';
 
 // ============================================================================
 // Welcome flow + tutorial guiado
 // ============================================================================
-const USER_NAME_KEY = 'crud_dungeon_user_v1';
-const TUTORIAL_DONE_KEY = 'crud_dungeon_tutorial_done_v1';
-const PLAYER_CUSTOM_KEY = 'crud_dungeon_player_v1';
-
-type TutStep = 'name' | 'intro' | 'move' | 'create' | 'read' | 'update' | 'delete' | 'done' | 'off';
-type ActiveTutStep = Exclude<TutStep, 'name' | 'intro' | 'off'>;
-
 const CRUD_CARDS = [
   { letter: 'C', name: 'CREATE', verb: 'POST', sql: 'INSERT INTO ...', color: 'emerald' as const, desc: 'Adicionar uma linha nova na tabela. No jogo: ferramenta BUILD num quadrado vazio.' },
   { letter: 'R', name: 'READ', verb: 'GET', sql: 'SELECT * FROM ...', color: 'cyan' as const, desc: 'Ler o que está salvo. No jogo: vá até o quadrado "?" no canto superior esquerdo.' },
@@ -134,12 +38,30 @@ const TUTORIAL_STEPS: Record<ActiveTutStep, {
   num: number; total: number; title: string; body: (name: string) => string;
   color: 'cyan' | 'emerald' | 'amber' | 'rose' | 'violet';
 }> = {
-  move:   { num: 1, total: 5, title: 'Mover',  body: (n) => `${n}, primeiro vamos te ensinar a se mexer. Use as setas ↑↓←→ ou WASD.`, color: 'cyan' },
-  create: { num: 2, total: 5, title: 'CREATE = INSERT', body: (n) => `Boa, ${n}! Agora vá até um quadrado vazio e aperte Espaço. Você vai criar uma linha nova no banco (operação CREATE).`, color: 'emerald' },
-  read:   { num: 3, total: 5, title: 'READ = SELECT', body: (n) => `Top, ${n}! Agora vá até o quadrado com "?" (canto superior esquerdo) e aperte Espaço para LER tudo do banco.`, color: 'cyan' },
-  update: { num: 4, total: 5, title: 'UPDATE = UPDATE', body: (n) => `${n}, clique em UPGRADE no menu, encare um objeto seu e aperte Espaço para mudar o status dele.`, color: 'amber' },
-  delete: { num: 5, total: 5, title: 'DELETE = DELETE', body: (n) => `Última, ${n}! Clique em DELETE no menu, encare um objeto seu e aperte Espaço para apagar do banco.`, color: 'rose' },
-  done:   { num: 5, total: 5, title: 'Tutorial completo', body: (n) => `🎉 Parabéns, ${n}! Você dominou as 4 operações do CRUD. Agora é só explorar — todo SQL real aparece no painel à direita.`, color: 'violet' },
+  move: {
+    num: 1, total: 5, title: 'Mover · primeiro passo', color: 'cyan',
+    body: (n) => `${n}, antes de tudo: use ↑↓←→ ou WASD pra mexer o boneco. O quadrado cyan na sua frente é o "tile alvo" — toda ação vai acontecer LÁ, não onde você está.`,
+  },
+  create: {
+    num: 2, total: 5, title: 'CREATE · INSERT INTO', color: 'emerald',
+    body: (n) => `${n}, vá até um quadrado VAZIO e aperte Espaço. Isso roda INSERT INTO game_objects (...) VALUES (...) no MySQL. É como adicionar uma linha nova numa planilha — só que num banco real, na AWS. O id é gerado automático pelo banco (AUTO_INCREMENT).`,
+  },
+  read: {
+    num: 3, total: 5, title: 'READ · SELECT * FROM', color: 'cyan',
+    body: (n) => `${n}, agora vá ao "?" no canto superior esquerdo e aperte Espaço. Isso roda SELECT * FROM game_objects — lê TODAS as linhas que você já criou. É a operação mais comum: 90% das ações em apps reais são leitura.`,
+  },
+  update: {
+    num: 4, total: 5, title: 'UPDATE · alterar registro', color: 'amber',
+    body: (n) => `${n}, escolha UPGRADE (atalho: 2), encare um objeto seu e aperte Espaço. Roda UPDATE game_objects SET status='...' WHERE id=X. O status evolui novo→ativo→upgrade→critico, e o ícone CRESCE com o nível. UPDATE sem WHERE seria desastre — afetaria TODAS as linhas.`,
+  },
+  delete: {
+    num: 5, total: 5, title: 'DELETE · remover linha', color: 'rose',
+    body: (n) => `${n}, último passo. Escolha DELETE (atalho: 3), encare um objeto e Espaço. Roda DELETE FROM game_objects WHERE id=X. Apaga PERMANENTE — não tem lixeira. Sempre confira o WHERE antes, em produção isso já causou demissão de muita gente :)`,
+  },
+  done: {
+    num: 5, total: 5, title: '🎉 Mestre do CRUD', color: 'violet',
+    body: (n) => `Parabéns, ${n}! Você dominou as 4 operações que TODO sistema com banco usa: CREATE, READ, UPDATE, DELETE. Olha o painel CRUD Live ao lado — todo SQL que rodou está lá. Agora é só explorar à vontade!`,
+  },
 };
 
 function Kbd({ children }: { children: React.ReactNode }) {
@@ -190,36 +112,6 @@ function ModalShell({ children }: { children: React.ReactNode }) {
     </motion.div>
   );
 }
-
-// EDUCATIONAL: presets de cor pro player. Cada preset vira RGB pro kaplay
-// e classe Tailwind pra preview no modal.
-const PLAYER_PRESETS = {
-  shirt: {
-    teal:    { rgb: [15, 118, 110],  bg: 'bg-teal-700',    accent: [34, 211, 238] },
-    rose:    { rgb: [225, 29, 72],   bg: 'bg-rose-600',    accent: [254, 205, 211] },
-    indigo:  { rgb: [67, 56, 202],   bg: 'bg-indigo-700',  accent: [165, 180, 252] },
-    emerald: { rgb: [4, 120, 87],    bg: 'bg-emerald-700', accent: [110, 231, 183] },
-    orange:  { rgb: [194, 65, 12],   bg: 'bg-orange-700',  accent: [253, 186, 116] },
-  },
-  hat: {
-    cyan:    { rgb: [34, 211, 238],  bg: 'bg-cyan-400',   shade: [8, 145, 178] },
-    amber:   { rgb: [251, 191, 36],  bg: 'bg-amber-400',  shade: [180, 83, 9] },
-    rose:    { rgb: [244, 63, 94],   bg: 'bg-rose-500',   shade: [159, 18, 57] },
-    violet:  { rgb: [167, 139, 250], bg: 'bg-violet-400', shade: [109, 40, 217] },
-    none:    { rgb: null,            bg: 'bg-slate-700',  shade: null },
-  },
-  skin: {
-    tan:    { rgb: [252, 211, 170],  bg: 'bg-[#fcd3aa]' },
-    light:  { rgb: [255, 224, 189],  bg: 'bg-[#ffe0bd]' },
-    medium: { rgb: [210, 160, 110],  bg: 'bg-[#d2a06e]' },
-    dark:   { rgb: [128, 80, 50],    bg: 'bg-[#805032]' },
-  },
-} as const;
-
-type ShirtKey = keyof typeof PLAYER_PRESETS.shirt;
-type HatKey = keyof typeof PLAYER_PRESETS.hat;
-type SkinKey = keyof typeof PLAYER_PRESETS.skin;
-type PlayerCustom = { shirt: ShirtKey; hat: HatKey; skin: SkinKey };
 
 function ColorPicker<K extends string>({
   label, options, value, onChange,
@@ -441,6 +333,8 @@ function TutorialBanner({
 }) {
   const info = TUTORIAL_STEPS[step];
   const cm = COLOR_MAP[info.color];
+  // EDUCATIONAL: colapsável em mobile pra não roubar espaço do canvas.
+  const [collapsed, setCollapsed] = useState(false);
   return (
     <motion.div
       key={step}
@@ -449,79 +343,61 @@ function TutorialBanner({
       animate={{ y: 0, opacity: 1 }}
       exit={{ y: -10, opacity: 0 }}
       transition={{ type: 'spring', stiffness: 350, damping: 26 }}
-      className={`glass rounded-lg px-3 py-2 border ${cm.ring} ${cm.bg} flex items-start gap-3`}
+      className={`glass rounded-lg border ${cm.ring} ${cm.bg} ${collapsed ? 'px-2 py-1' : 'px-3 py-2'}`}
     >
-      <div className={`shrink-0 w-8 h-8 rounded-md bg-white/5 flex items-center justify-center font-mono ${cm.fg} text-[11px] font-bold`}>
-        {step === 'done' ? '✓' : `${info.num}/${info.total}`}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className={`font-mono text-[11px] ${cm.fg} mb-0.5 uppercase tracking-wider`}>
-          {info.title}
+      <div className="flex items-start gap-2">
+        <button
+          onClick={() => setCollapsed((v) => !v)}
+          className={`shrink-0 ${collapsed ? 'w-6 h-6' : 'w-8 h-8'} rounded-md bg-white/5 flex items-center justify-center font-mono ${cm.fg} text-[11px] font-bold transition-all hover:bg-white/10`}
+          title={collapsed ? 'expandir' : 'minimizar'}
+        >
+          {step === 'done' ? '✓' : `${info.num}/${info.total}`}
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <div className={`font-mono text-[10px] ${cm.fg} uppercase tracking-wider truncate`}>
+              {info.title}
+            </div>
+            {collapsed && (
+              <button
+                onClick={() => setCollapsed(false)}
+                className="text-[10px] font-mono text-slate-500 hover:text-slate-200 ml-auto"
+              >
+                ler →
+              </button>
+            )}
+          </div>
+          {!collapsed && (
+            <p className="text-[12px] text-slate-200 leading-snug mt-0.5">
+              {info.body(name)}
+            </p>
+          )}
         </div>
-        <p className="text-[12px] text-slate-200 leading-snug">
-          {info.body(name)}
-        </p>
+        {!collapsed && (step === 'done' ? (
+          <button
+            onClick={onClose}
+            className={`text-[10px] font-mono ${cm.fg} px-2 py-1 self-center hover:bg-white/5 rounded shrink-0`}
+          >
+            fechar
+          </button>
+        ) : (
+          <button
+            onClick={onSkip}
+            className="text-[10px] font-mono text-slate-500 hover:text-slate-300 px-2 py-1 self-center shrink-0"
+            title="Pular tutorial"
+          >
+            pular
+          </button>
+        ))}
       </div>
-      {step === 'done' ? (
-        <button
-          onClick={onClose}
-          className={`text-[10px] font-mono ${cm.fg} px-2 py-1 self-center hover:bg-white/5 rounded shrink-0`}
-        >
-          fechar
-        </button>
-      ) : (
-        <button
-          onClick={onSkip}
-          className="text-[10px] font-mono text-slate-500 hover:text-slate-300 px-2 py-1 self-center shrink-0"
-          title="Pular tutorial"
-        >
-          pular
-        </button>
-      )}
     </motion.div>
   );
 }
 
 // ============================================================================
 // SQL preview bar — sempre visível, mostra o que vai rodar se você apertar Espaço
+// (highlightSql está em lib/game/sql.tsx)
 // ============================================================================
-function highlightSql(sql: string) {
-  const KEYWORDS = /\b(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|ORDER|BY|ASC|DESC)\b/g;
-  const parts: { type: 'kw' | 'str' | 'comment' | 'text'; value: string }[] = [];
-
-  // Linhas de comentário
-  const lines = sql.split('\n');
-  return lines.map((line, li) => {
-    if (line.trim().startsWith('--')) {
-      return <span key={li} className="text-slate-500 italic block">{line}{li < lines.length - 1 ? '\n' : ''}</span>;
-    }
-    parts.length = 0;
-    let last = 0;
-    let m: RegExpExecArray | null;
-    KEYWORDS.lastIndex = 0;
-    while ((m = KEYWORDS.exec(line)) !== null) {
-      if (m.index > last) parts.push({ type: 'text', value: line.slice(last, m.index) });
-      parts.push({ type: 'kw', value: m[0] });
-      last = KEYWORDS.lastIndex;
-    }
-    if (last < line.length) parts.push({ type: 'text', value: line.slice(last) });
-
-    return (
-      <span key={li} className="block">
-        {parts.map((p, i) => {
-          if (p.type === 'kw') return <span key={i} className="text-violet-300 font-bold">{p.value}</span>;
-          // strings entre aspas simples
-          const sub = p.value.split(/('[^']*')/g);
-          return sub.map((sp, j) =>
-            sp.startsWith("'") && sp.endsWith("'")
-              ? <span key={`${i}-${j}`} className="text-amber-300">{sp}</span>
-              : <span key={`${i}-${j}`}>{sp}</span>
-          );
-        })}
-      </span>
-    );
-  });
-}
 
 interface SqlPreviewBarProps {
   tool: Tool;
@@ -554,7 +430,9 @@ function SqlPreviewBar({ tool, tipo, facing, target }: SqlPreviewBarProps) {
           <kbd className="px-1 border border-white/10 rounded bg-white/5">Espaço</kbd>
         </span>
       </div>
-      <pre className="whitespace-pre-wrap break-words text-slate-200 leading-tight">
+      {/* EDUCATIONAL: SQL detalhado só em sm+ pra mobile não estourar altura.
+          O painel CRUD Live (à direita / em outro tab) já mostra o SQL real após executar. */}
+      <pre className="hidden sm:block whitespace-pre-wrap break-words text-slate-200 leading-tight">
         {highlightSql(sql)}
       </pre>
     </motion.div>
@@ -707,8 +585,6 @@ function DPad({
     </div>
   );
 }
-
-type Direction = 'up' | 'down' | 'left' | 'right';
 
 // ============================================================================
 // Main component
@@ -1589,15 +1465,34 @@ function makeObjectNode(k: K, o: Objeto) {
       },
     },
   ]);
-  // queda + bounce + scale-up em paralelo
-  k.tween(cy - 80, cy, 0.45, (v: number) => (node.pos.y = v), k.easings.easeOutBounce);
-  k.tween(0.3, 1.15, 0.35, (v: number) => (node.scale = k.vec2(v, v)), k.easings.easeOutQuad);
-  k.wait(0.35, () => {
-    k.tween(1.15, 1, 0.18, (v: number) => (node.scale = k.vec2(v, v)), k.easings.easeOutQuad);
+  // EDUCATIONAL: queda + bounce + scale-up em paralelo. Tudo sincronizado num
+  // único hook update do node — assim, ao destruir o nó (DELETE rápido após CREATE)
+  // os tweens param junto, sem deixar fantasma cyan no mapa.
+  let entranceT = 0;
+  const ENTRANCE_DUR = 0.45;
+  const startY = cy - 80;
+  let shockwaveSpawned = false;
+  node.onUpdate(() => {
+    if (entranceT >= ENTRANCE_DUR) return;
+    entranceT += k.dt();
+    const t = Math.min(1, entranceT / ENTRANCE_DUR);
+    // bounce easing manual (aproxima easeOutBounce)
+    const bounceY = t < 0.7
+      ? 1 - Math.pow(1 - t / 0.7, 2)
+      : 1 - Math.abs(Math.sin((t - 0.7) * 10)) * 0.08;
+    node.pos.y = startY + (cy - startY) * bounceY;
+    // scale com overshoot
+    const s = t < 0.5
+      ? 0.3 + (1.15 - 0.3) * (t / 0.5)
+      : 1.15 - (1.15 - 1) * ((t - 0.5) / 0.5);
+    node.scale = k.vec2(s, s);
+    node.opacity = Math.min(1, t * 4);
+    // shockwave dispara quando aterrissa (~70% do entrance)
+    if (!shockwaveSpawned && t >= 0.7) {
+      shockwaveSpawned = true;
+      spawnShockwave(k, node.pos.x, node.pos.y);
+    }
   });
-  k.tween(0, 1, 0.25, (v: number) => (node.opacity = v), k.easings.easeOutQuad);
-  // shockwave no chão quando aterrissa
-  k.wait(0.4, () => spawnShockwave(k, cx, cy));
   return node;
 }
 
@@ -1684,9 +1579,8 @@ function cameraShake(k: K, magnitude: number, durationS: number) {
   });
 }
 
-// EDUCATIONAL: status forma uma "barra de progresso" — cada UPDATE adiciona
-// detalhes ao ícone. Metáfora: livro vazio → 1 livro → 2 livros → estante cheia.
-const STATUS_LEVEL: Record<Status, number> = { novo: 0, ativo: 1, upgrade: 2, critico: 3 };
+// EDUCATIONAL: status forma uma "barra de progresso" — STATUS_LEVEL em constants.ts.
+// Cada UPDATE adiciona detalhes ao ícone (metáfora: livro vazio → estante cheia).
 
 function drawObjectByType(k: K, tipo: Tipo, status: Status, pulseT: number) {
   const t = TIPO_META[tipo].color;
