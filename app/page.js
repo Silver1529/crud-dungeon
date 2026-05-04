@@ -2,6 +2,7 @@
 import GameEngine from '@/components/GameEngine';
 import CrudLivePanel from '@/components/CrudLivePanel';
 import TutorialReplayButton from '@/components/TutorialReplayButton';
+import EditPlayerButton from '@/components/EditPlayerButton';
 
 // EDUCATIONAL: split-screen 60/40 desktop, stack vertical em mobile.
 // Header e footer são minimalistas; o painel direito carrega a parte educacional.
@@ -25,7 +26,8 @@ export default function Page() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <EditPlayerButton />
           <TutorialReplayButton />
           <div className="text-[10px] font-mono text-slate-500 hidden sm:block">
             Next.js 16 · MySQL RDS · Kaplay

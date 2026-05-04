@@ -678,6 +678,15 @@ export default function GameEngine() {
     setTutorialStep('off');
   }, [setTutorialStep]);
 
+  // EDUCATIONAL: assim que chega em 'done', já marca como concluído no localStorage.
+  // O banner ainda fica visível com o "fechar", mas se você recarregar antes de fechar,
+  // o tutorial NÃO recomeça do zero. Tutorial é uma vez na vida.
+  useEffect(() => {
+    if (tutorialStep === 'done') {
+      try { localStorage.setItem(TUTORIAL_DONE_KEY, '1'); } catch { }
+    }
+  }, [tutorialStep]);
+
   // EDUCATIONAL: atalhos de teclado pra trocar tool sem usar mouse.
   // 1=BUILD, 2=UPGRADE, 3=DELETE, Tab cicla (Shift+Tab cicla pra trás).
   // Pula se foco está num input (welcome modal por exemplo).
@@ -831,15 +840,20 @@ export default function GameEngine() {
       // Tiles do data center
       drawDataCenterFloor(K_);
 
-      // Read panel "?" no canto (0,0)
-      K_.add([
+      // Read panel "?" no canto (0,0) — agora com pulsing + bounce + halo orbital.
+      const readBg = K_.add([
         K_.rect(TILE - 6, TILE - 6, { radius: 6 }),
         K_.pos(3, 3),
         K_.color(34, 211, 238),
         K_.opacity(0.18),
-        K_.outline(2, K_.rgb(34, 211, 238)),
+        K_.outline(3, K_.rgb(34, 211, 238)),
         K_.z(0),
+        { phaseT: 0 },
       ]);
+      readBg.onUpdate(() => {
+        readBg.phaseT += K_.dt() * 2;
+        readBg.opacity = 0.15 + 0.18 * Math.abs(Math.sin(readBg.phaseT));
+      });
       K_.add([
         K_.rect(TILE - 14, TILE - 14, { radius: 4 }),
         K_.pos(7, 7),
@@ -847,12 +861,34 @@ export default function GameEngine() {
         K_.outline(1, K_.rgb(34, 211, 238)),
         K_.z(1),
       ]);
-      K_.add([
-        K_.text('?', { size: 16 }),
-        K_.pos(TILE / 2 - 4, TILE / 2 - 10),
+      // "?" com bounce vertical
+      const qmark = K_.add([
+        K_.text('?', { size: 22 }),
+        K_.pos(TILE / 2 - 6, TILE / 2 - 13),
         K_.color(34, 211, 238),
         K_.z(2),
+        { phaseT: 0, baseY: TILE / 2 - 13 },
       ]);
+      qmark.onUpdate(() => {
+        qmark.phaseT += K_.dt() * 3;
+        qmark.pos.y = qmark.baseY + Math.sin(qmark.phaseT) * 2;
+      });
+      // halo orbital ao redor (3 dots circulando)
+      for (let i = 0; i < 3; i++) {
+        const dot = K_.add([
+          K_.circle(1.5),
+          K_.pos(TILE / 2, TILE / 2),
+          K_.color(34, 211, 238),
+          K_.opacity(0.7),
+          K_.z(3),
+          { phaseT: i * 2.1 },
+        ]);
+        dot.onUpdate(() => {
+          dot.phaseT += K_.dt() * 1.5;
+          dot.pos.x = TILE / 2 + Math.cos(dot.phaseT) * (TILE / 2 - 4);
+          dot.pos.y = TILE / 2 + Math.sin(dot.phaseT) * (TILE / 2 - 4);
+        });
+      }
       K_.add([
         K_.text('READ', { size: 6 }),
         K_.pos(8, TILE - 12),
@@ -1252,31 +1288,35 @@ function drawDataCenterFloor(k: K) {
     return ((s % 1000) + 1000) % 1000 / 1000;
   };
 
-  // base com biomas: 3 zonas circulares de cor (cyan/violet/emerald)
-  // que se misturam, criando "regiões" no mapa
+  // EDUCATIONAL: 4 biomas mais vibrantes — magenta/violet/cyan/emerald.
+  // Cores SATURADAS pra aparecer no fundo escuro. As zonas se sobrepõem.
   const biomes: { cx: number; cy: number; r: number; rgb: [number, number, number] }[] = [
-    { cx: 4,  cy: 4,  r: 6, rgb: [22, 30, 80]  },   // zona violet
-    { cx: 16, cy: 5,  r: 5, rgb: [10, 50, 70]  },   // zona cyan
-    { cx: 10, cy: 12, r: 6, rgb: [10, 60, 50]  },   // zona emerald
+    { cx: 5,  cy: 4,  r: 6, rgb: [80, 30, 110] },   // violet/magenta
+    { cx: 16, cy: 4,  r: 5, rgb: [20, 80, 110] },   // cyan profundo
+    { cx: 4,  cy: 11, r: 5, rgb: [110, 60, 30] },   // amber/laranja
+    { cx: 15, cy: 12, r: 6, rgb: [20, 90, 70]  },   // emerald
   ];
 
   for (let y = 0; y < ROWS; y++) {
     for (let x = 0; x < COLS; x++) {
       const variant = (x + y) % 2 === 0 ? 1 : 0;
-      // mistura de cor por proximidade aos biomas
-      let r = 11 + variant * 3, g = 18 + variant * 3, b = 36 + variant * 4;
+      let r = 14 + variant * 4, g = 22 + variant * 4, b = 42 + variant * 5;
       for (const bi of biomes) {
         const dx = x - bi.cx, dy = y - bi.cy;
         const dist = Math.sqrt(dx * dx + dy * dy);
         const inf = Math.max(0, 1 - dist / bi.r);
-        r += bi.rgb[0] * inf * 0.35;
-        g += bi.rgb[1] * inf * 0.35;
-        b += bi.rgb[2] * inf * 0.35;
+        r += bi.rgb[0] * inf * 0.55;
+        g += bi.rgb[1] * inf * 0.55;
+        b += bi.rgb[2] * inf * 0.55;
       }
+      // clamp
+      r = Math.min(255, Math.round(r));
+      g = Math.min(255, Math.round(g));
+      b = Math.min(255, Math.round(b));
       k.add([
         k.rect(TILE, TILE),
         k.pos(x * TILE, y * TILE),
-        k.color(Math.round(r), Math.round(g), Math.round(b)),
+        k.color(r, g, b),
         k.z(-3),
       ]);
 
@@ -1299,14 +1339,14 @@ function drawDataCenterFloor(k: K) {
         ]);
       }
 
-      // decorações fixas em ~12% dos tiles internos (não tocam onde player começa
-      // nem o "?" panel em (0,0)). Escolha procedural.
+      // decorações fixas em ~18% dos tiles internos (não tocam o spawn do player
+      // nem o "?" panel em (0,0)). Escolha procedural via PRNG seeded.
       if (x > 1 && y > 1 && x < COLS - 2 && y < ROWS - 2) {
         const seed = rand(x, y);
-        if (seed < 0.12 && !(x === 5 && y === 9)) {
+        if (seed < 0.18 && !(x === 5 && y === 9)) {
           const kind = Math.floor(seed * 1000) % 5;
           drawFloorDecoration(k, x * TILE + TILE / 2, y * TILE + TILE / 2, kind, seed);
-          continue; // pula traço de circuito se tem decoração
+          continue;
         }
       }
 
