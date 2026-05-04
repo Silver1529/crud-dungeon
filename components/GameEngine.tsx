@@ -974,8 +974,8 @@ export default function GameEngine() {
         }
       };
       let lastObjs = stateRef.current.objetos;
-      const unsub = useGameStore.subscribe((state) => {
-        const next = state.objetos as Objeto[];
+      const unsub = useGameStore.subscribe((state: { objetos: Objeto[] }) => {
+        const next = state.objetos;
         if (next !== lastObjs) {
           lastObjs = next;
           syncObjects();
