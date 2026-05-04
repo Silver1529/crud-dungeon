@@ -118,6 +118,7 @@ function buildSqlPreview(tool: Tool, tipo: Tipo, fx: number, fy: number, target:
 // ============================================================================
 const USER_NAME_KEY = 'crud_dungeon_user_v1';
 const TUTORIAL_DONE_KEY = 'crud_dungeon_tutorial_done_v1';
+const PLAYER_CUSTOM_KEY = 'crud_dungeon_player_v1';
 
 type TutStep = 'name' | 'intro' | 'move' | 'create' | 'read' | 'update' | 'delete' | 'done' | 'off';
 type ActiveTutStep = Exclude<TutStep, 'name' | 'intro' | 'off'>;
@@ -190,29 +191,135 @@ function ModalShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function NameStep({ onSubmit, onSkip }: { onSubmit: (name: string) => void; onSkip: () => void }) {
+// EDUCATIONAL: presets de cor pro player. Cada preset vira RGB pro kaplay
+// e classe Tailwind pra preview no modal.
+const PLAYER_PRESETS = {
+  shirt: {
+    teal:    { rgb: [15, 118, 110],  bg: 'bg-teal-700',    accent: [34, 211, 238] },
+    rose:    { rgb: [225, 29, 72],   bg: 'bg-rose-600',    accent: [254, 205, 211] },
+    indigo:  { rgb: [67, 56, 202],   bg: 'bg-indigo-700',  accent: [165, 180, 252] },
+    emerald: { rgb: [4, 120, 87],    bg: 'bg-emerald-700', accent: [110, 231, 183] },
+    orange:  { rgb: [194, 65, 12],   bg: 'bg-orange-700',  accent: [253, 186, 116] },
+  },
+  hat: {
+    cyan:    { rgb: [34, 211, 238],  bg: 'bg-cyan-400',   shade: [8, 145, 178] },
+    amber:   { rgb: [251, 191, 36],  bg: 'bg-amber-400',  shade: [180, 83, 9] },
+    rose:    { rgb: [244, 63, 94],   bg: 'bg-rose-500',   shade: [159, 18, 57] },
+    violet:  { rgb: [167, 139, 250], bg: 'bg-violet-400', shade: [109, 40, 217] },
+    none:    { rgb: null,            bg: 'bg-slate-700',  shade: null },
+  },
+  skin: {
+    tan:    { rgb: [252, 211, 170],  bg: 'bg-[#fcd3aa]' },
+    light:  { rgb: [255, 224, 189],  bg: 'bg-[#ffe0bd]' },
+    medium: { rgb: [210, 160, 110],  bg: 'bg-[#d2a06e]' },
+    dark:   { rgb: [128, 80, 50],    bg: 'bg-[#805032]' },
+  },
+} as const;
+
+type ShirtKey = keyof typeof PLAYER_PRESETS.shirt;
+type HatKey = keyof typeof PLAYER_PRESETS.hat;
+type SkinKey = keyof typeof PLAYER_PRESETS.skin;
+type PlayerCustom = { shirt: ShirtKey; hat: HatKey; skin: SkinKey };
+
+function ColorPicker<K extends string>({
+  label, options, value, onChange,
+}: {
+  label: string;
+  options: { key: K; bg: string }[];
+  value: K;
+  onChange: (k: K) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider w-12">{label}</span>
+      <div className="flex gap-1.5 flex-wrap">
+        {options.map((o) => (
+          <button
+            key={o.key}
+            type="button"
+            onClick={() => onChange(o.key)}
+            className={`w-6 h-6 rounded-md ${o.bg} transition-all border-2 ${value === o.key
+              ? 'border-cyan-400 scale-110 shadow-[0_0_12px_rgba(34,211,238,0.5)]'
+              : 'border-white/10 hover:border-white/30'
+              }`}
+            aria-label={`${label} ${o.key}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlayerPreview({ custom }: { custom: PlayerCustom }) {
+  // Preview SVG procedural (mesma silhueta do kaplay) com as cores escolhidas.
+  const shirt = PLAYER_PRESETS.shirt[custom.shirt];
+  const hat = PLAYER_PRESETS.hat[custom.hat];
+  const skin = PLAYER_PRESETS.skin[custom.skin];
+  const rgbStr = (c: readonly [number, number, number]) => `rgb(${c[0]},${c[1]},${c[2]})`;
+  return (
+    <svg viewBox="-20 -22 40 44" width="96" height="96" className="drop-shadow-[0_8px_24px_rgba(34,211,238,0.3)]">
+      <ellipse cx="0" cy="14" rx="9" ry="2.5" fill="rgba(0,0,0,0.4)" />
+      <rect x="-5" y="7" width="4" height="7" rx="1" fill="rgb(15,23,42)" />
+      <rect x="1" y="7" width="4" height="7" rx="1" fill="rgb(15,23,42)" />
+      <rect x="-7" y="-3" width="14" height="11" rx="2" fill={rgbStr(shirt.rgb)} />
+      <rect x="-1" y="0" width="2" height="5" fill={rgbStr(shirt.accent)} opacity="0.85" />
+      <rect x="-9" y="-2" width="3" height="8" rx="1" fill={rgbStr(shirt.rgb)} />
+      <rect x="6" y="-2" width="3" height="8" rx="1" fill={rgbStr(shirt.rgb)} />
+      <rect x="-5" y="-12" width="10" height="9" rx="2" fill={rgbStr(skin.rgb)} />
+      <rect x="-3" y="-8" width="1.6" height="1.6" fill="rgb(15,23,42)" />
+      <rect x="2" y="-8" width="1.6" height="1.6" fill="rgb(15,23,42)" />
+      {hat.rgb && <>
+        <rect x="-6" y="-16" width="12" height="5" rx="3" fill={rgbStr(hat.rgb)} />
+        <rect x="-7" y="-12" width="14" height="1.5" fill={hat.shade ? rgbStr(hat.shade) : '#000'} />
+        <rect x="-3" y="-15" width="3" height="1" fill="white" opacity="0.6" />
+      </>}
+    </svg>
+  );
+}
+
+function NameStep({
+  onSubmit, onSkip,
+}: {
+  onSubmit: (name: string, custom: PlayerCustom) => void;
+  onSkip: () => void;
+}) {
   const [value, setValue] = useState('');
-  // EDUCATIONAL: validação simples — 1-20 chars, sem HTML/scripts (DOMPurify roda no servidor também).
+  const [custom, setCustom] = useState<PlayerCustom>({ shirt: 'teal', hat: 'cyan', skin: 'tan' });
   const trimmed = value.replace(/[<>]/g, '').trim().slice(0, 20);
   return (
     <ModalShell>
       <div className="flex flex-col items-center text-center mb-4">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/favicon.ico"
-          alt="CRUD Dungeon"
-          width={88}
-          height={88}
-          className="rounded-2xl mb-3 shadow-[0_0_50px_rgba(34,211,238,0.35)] ring-1 ring-cyan-400/30"
-        />
-        <h2 className="font-mono text-xl text-cyan-300 flex items-center gap-2">
-          <Sparkles className="w-5 h-5" /> Antes de começar
+        <PlayerPreview custom={custom} />
+        <h2 className="font-mono text-xl text-cyan-300 flex items-center gap-2 mt-2">
+          <Sparkles className="w-5 h-5" /> Bem-vindo
         </h2>
       </div>
       <p className="text-slate-300 text-sm leading-relaxed mb-4 text-center">
-        Como podemos te chamar? Vou te guiar pelas 4 operações fundamentais de banco de dados (CRUD), uma por vez.
+        Escolhe um nome e personaliza seu personagem. Vou te guiar pelas 4 operações de CRUD, uma por vez.
       </p>
-      <form onSubmit={(e) => { e.preventDefault(); if (trimmed) onSubmit(trimmed); }}>
+
+      <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3 mb-3 space-y-2">
+        <ColorPicker
+          label="camisa"
+          value={custom.shirt}
+          options={(Object.keys(PLAYER_PRESETS.shirt) as ShirtKey[]).map((k) => ({ key: k, bg: PLAYER_PRESETS.shirt[k].bg }))}
+          onChange={(k) => setCustom((c) => ({ ...c, shirt: k }))}
+        />
+        <ColorPicker
+          label="capacete"
+          value={custom.hat}
+          options={(Object.keys(PLAYER_PRESETS.hat) as HatKey[]).map((k) => ({ key: k, bg: PLAYER_PRESETS.hat[k].bg }))}
+          onChange={(k) => setCustom((c) => ({ ...c, hat: k }))}
+        />
+        <ColorPicker
+          label="pele"
+          value={custom.skin}
+          options={(Object.keys(PLAYER_PRESETS.skin) as SkinKey[]).map((k) => ({ key: k, bg: PLAYER_PRESETS.skin[k].bg }))}
+          onChange={(k) => setCustom((c) => ({ ...c, skin: k }))}
+        />
+      </div>
+
+      <form onSubmit={(e) => { e.preventDefault(); if (trimmed) onSubmit(trimmed, custom); }}>
         <input
           autoFocus
           value={value}
@@ -601,11 +708,13 @@ export default function GameEngine() {
     tipo: Tipo;
     tool: Tool;
     facing: FacingTile;
+    custom: PlayerCustom;
   }>({
     objetos: [],
     tipo: 'servidor',
     tool: 'build',
     facing: { x: 5, y: 9 },
+    custom: { shirt: 'teal', hat: 'cyan', skin: 'tan' },
   });
   const cbRef = useRef<{
     create?: (x: number, y: number) => void;
@@ -618,8 +727,10 @@ export default function GameEngine() {
   const objetos = useGameStore((s: any) => s.objetos as Objeto[]);
   const userName = useGameStore((s: any) => s.userName as string | null);
   const tutorialStep = useGameStore((s: any) => s.tutorialStep as TutStep);
+  const playerCustom = useGameStore((s: any) => s.playerCustom as PlayerCustom);
   const setUserName = useGameStore((s: any) => s.setUserName as (n: string) => void);
   const setTutorialStep = useGameStore((s: any) => s.setTutorialStep as (st: TutStep) => void);
+  const setPlayerCustom = useGameStore((s: any) => s.setPlayerCustom as (c: PlayerCustom) => void);
 
   const [tipo, setTipo] = useState<Tipo>('servidor');
   const [tool, setTool] = useState<Tool>('build');
@@ -634,24 +745,32 @@ export default function GameEngine() {
   const updateMut = useUpdateObjeto() as unknown as { mutate: Mutate<{ id: number | string; status: Status }> };
   const deleteMut = useDeleteObjeto() as unknown as { mutate: Mutate<number | string> };
 
-  // Carrega nome + progresso do tutorial do localStorage (após hydration).
+  // Carrega nome + progresso do tutorial + customização do localStorage.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
       const savedName = localStorage.getItem(USER_NAME_KEY);
       const tutDone = localStorage.getItem(TUTORIAL_DONE_KEY) === '1';
+      const savedCustom = localStorage.getItem(PLAYER_CUSTOM_KEY);
+      if (savedCustom) {
+        try { setPlayerCustom(JSON.parse(savedCustom)); } catch { }
+      }
       if (savedName) {
         setUserName(savedName);
         setTutorialStep(tutDone ? 'off' : 'intro');
       }
     } catch { }
-  }, [setUserName, setTutorialStep]);
+  }, [setUserName, setTutorialStep, setPlayerCustom]);
 
-  const onNameSubmit = useCallback((name: string) => {
-    try { localStorage.setItem(USER_NAME_KEY, name); } catch { }
+  const onNameSubmit = useCallback((name: string, custom: PlayerCustom) => {
+    try {
+      localStorage.setItem(USER_NAME_KEY, name);
+      localStorage.setItem(PLAYER_CUSTOM_KEY, JSON.stringify(custom));
+    } catch { }
     setUserName(name);
+    setPlayerCustom(custom);
     setTutorialStep('intro');
-  }, [setUserName, setTutorialStep]);
+  }, [setUserName, setPlayerCustom, setTutorialStep]);
 
   const onSkipAll = useCallback(() => {
     try {
@@ -695,6 +814,7 @@ export default function GameEngine() {
   useEffect(() => { stateRef.current.objetos = objetos; }, [objetos]);
   useEffect(() => { stateRef.current.tipo = tipo; }, [tipo]);
   useEffect(() => { stateRef.current.tool = tool; }, [tool]);
+  useEffect(() => { stateRef.current.custom = playerCustom; }, [playerCustom]);
 
   const tileOcupado = useCallback(
     (x: number, y: number): Objeto | undefined =>
@@ -722,8 +842,9 @@ export default function GameEngine() {
     cbRef.current.create = (x, y) => {
       if (tileOcupado(x, y)) return notifyApi({ method: 'POST', status: 409, ms: 0 });
       const start = performance.now();
+      const tipo = stateRef.current.tipo;
       createMut.mutate(
-        { tipo: stateRef.current.tipo, pos_x: x, pos_y: y },
+        { tipo, pos_x: x, pos_y: y },
         {
           onSuccess: (created) => {
             notifyApi({ method: 'POST', status: 201, ms: Math.round(performance.now() - start) });
@@ -731,6 +852,9 @@ export default function GameEngine() {
               try { navigator.vibrate(10); } catch { }
             }
             spawnSqlBubble(kRef.current, `INSERT id=${(created as Objeto).id}`, x, y, [16, 185, 129]);
+            // floating "+1 servidor" estilo RPG + camera shake leve
+            spawnFloatingText(kRef.current, `+1 ${tipo}`, x, y - 1, [16, 185, 129], 11);
+            cameraShake(kRef.current, 1.5, 0.18);
             advanceIf('create', 'read');
           },
           onError: (e: any) =>
@@ -741,12 +865,17 @@ export default function GameEngine() {
     cbRef.current.update = (obj) => {
       const start = performance.now();
       const next = STATUS_NEXT[obj.status];
+      const fromStatus = obj.status;
       updateMut.mutate(
         { id: obj.id as number, status: next },
         {
           onSuccess: () => {
             notifyApi({ method: 'PUT', status: 200, ms: Math.round(performance.now() - start) });
             spawnSqlBubble(kRef.current, `SET status='${next}'`, obj.pos_x, obj.pos_y, [251, 191, 36]);
+            // texto flutuante "novo → ativo" + estrelas rodando + shake
+            spawnFloatingText(kRef.current, `${fromStatus} → ${next}`, obj.pos_x, obj.pos_y - 1, [251, 191, 36], 10);
+            spawnLevelUpStars(kRef.current, obj.pos_x * TILE + TILE / 2, obj.pos_y * TILE + TILE / 2, [251, 191, 36]);
+            cameraShake(kRef.current, 1.2, 0.15);
             advanceIf('update', 'delete');
           },
           onError: (e: any) =>
@@ -760,6 +889,8 @@ export default function GameEngine() {
         onSuccess: () => {
           notifyApi({ method: 'DELETE', status: 200, ms: Math.round(performance.now() - start) });
           spawnSqlBubble(kRef.current, `DELETE id=${obj.id}`, obj.pos_x, obj.pos_y, [244, 63, 94]);
+          spawnFloatingText(kRef.current, `-1`, obj.pos_x, obj.pos_y - 1, [244, 63, 94], 12);
+          cameraShake(kRef.current, 3, 0.25);
           advanceIf('delete', 'done');
         },
         onError: (e: any) =>
@@ -769,6 +900,7 @@ export default function GameEngine() {
     cbRef.current.read = () => {
       notifyApi({ method: 'GET', status: 200, ms: 0 });
       spawnSqlBubble(kRef.current, `SELECT *`, 0, 0, [34, 211, 238]);
+      spawnFloatingText(kRef.current, `SELECT *`, 0, -1, [34, 211, 238], 10);
       advanceIf('read', 'update');
     };
   });
@@ -868,7 +1000,7 @@ export default function GameEngine() {
             stateRef.current.facing = { x: fx, y: fy };
           },
           draw() {
-            drawDevopsSprite(K_, this.frame, this.dir, this.bobble);
+            drawDevopsSprite(K_, this.frame, this.dir, this.bobble, stateRef.current.custom);
           },
         },
       ]);
@@ -1284,80 +1416,37 @@ function spawnAmbientParticle(k: K) {
 }
 
 // ===== Player (DevOps) =====
-function drawDevopsSprite(k: K, frame: number, dir: Direction, bobble: number) {
-  // EDUCATIONAL: sprite procedural, 4 frames. Personagem DevOps com hard-hat ciano.
-  // Coordenadas locais: (0,0) = centro do entity, +y = baixo.
+function drawDevopsSprite(k: K, frame: number, dir: Direction, bobble: number, custom: PlayerCustom) {
+  // EDUCATIONAL: sprite procedural, 4 frames. Cores customizáveis via PlayerCustom.
+  const shirt = PLAYER_PRESETS.shirt[custom.shirt];
+  const hat = PLAYER_PRESETS.hat[custom.hat];
+  const skin = PLAYER_PRESETS.skin[custom.skin];
 
   // sombra
   k.drawEllipse({
-    pos: k.vec2(0, 14),
-    radiusX: 9,
-    radiusY: 2.5,
-    color: k.rgb(0, 0, 0),
-    opacity: 0.5,
+    pos: k.vec2(0, 14), radiusX: 9, radiusY: 2.5,
+    color: k.rgb(0, 0, 0), opacity: 0.5,
   });
 
   const bob = Math.sin(bobble) * 0.7;
-
-  // pernas (animadas) — desenhar primeiro para ficarem atrás do corpo
   const legOffset = [0, 1.5, 0, -1.5][frame] ?? 0;
-  k.drawRect({
-    pos: k.vec2(-5, 7 + legOffset),
-    width: 4,
-    height: 7,
-    color: k.rgb(15, 23, 42),
-    radius: 1,
-  });
-  k.drawRect({
-    pos: k.vec2(1, 7 - legOffset),
-    width: 4,
-    height: 7,
-    color: k.rgb(15, 23, 42),
-    radius: 1,
-  });
+
+  // pernas
+  k.drawRect({ pos: k.vec2(-5, 7 + legOffset), width: 4, height: 7, color: k.rgb(15, 23, 42), radius: 1 });
+  k.drawRect({ pos: k.vec2(1, 7 - legOffset), width: 4, height: 7, color: k.rgb(15, 23, 42), radius: 1 });
 
   // corpo (camisa)
-  k.drawRect({
-    pos: k.vec2(-7, -3 + bob),
-    width: 14,
-    height: 11,
-    color: k.rgb(15, 118, 110), // teal escuro
-    radius: 2,
-  });
-  // estampa central da camisa
-  k.drawRect({
-    pos: k.vec2(-1, 0 + bob),
-    width: 2,
-    height: 5,
-    color: k.rgb(34, 211, 238),
-    opacity: 0.85,
-  });
-  // braços (curtos)
-  k.drawRect({
-    pos: k.vec2(-9, -2 + bob + (frame % 2 === 0 ? 0 : 1)),
-    width: 3,
-    height: 8,
-    color: k.rgb(15, 118, 110),
-    radius: 1,
-  });
-  k.drawRect({
-    pos: k.vec2(6, -2 + bob - (frame % 2 === 0 ? 0 : 1)),
-    width: 3,
-    height: 8,
-    color: k.rgb(15, 118, 110),
-    radius: 1,
-  });
+  k.drawRect({ pos: k.vec2(-7, -3 + bob), width: 14, height: 11, color: k.rgb(...shirt.rgb), radius: 2 });
+  // estampa central
+  k.drawRect({ pos: k.vec2(-1, 0 + bob), width: 2, height: 5, color: k.rgb(...shirt.accent), opacity: 0.85 });
+  // braços
+  k.drawRect({ pos: k.vec2(-9, -2 + bob + (frame % 2 === 0 ? 0 : 1)), width: 3, height: 8, color: k.rgb(...shirt.rgb), radius: 1 });
+  k.drawRect({ pos: k.vec2(6, -2 + bob - (frame % 2 === 0 ? 0 : 1)), width: 3, height: 8, color: k.rgb(...shirt.rgb), radius: 1 });
 
-  // cabeça (rosto)
-  k.drawRect({
-    pos: k.vec2(-5, -12 + bob),
-    width: 10,
-    height: 9,
-    color: k.rgb(252, 211, 170), // skin
-    radius: 2,
-  });
+  // cabeça (skin)
+  k.drawRect({ pos: k.vec2(-5, -12 + bob), width: 10, height: 9, color: k.rgb(...skin.rgb), radius: 2 });
 
-  // olhos por direção
+  // olhos
   const eye = (x: number, y: number, w = 1.6, h = 1.6) =>
     k.drawRect({ pos: k.vec2(x, y + bob), width: w, height: h, color: k.rgb(15, 23, 42) });
   if (dir === 'down') { eye(-3, -8); eye(2, -8); }
@@ -1365,44 +1454,30 @@ function drawDevopsSprite(k: K, frame: number, dir: Direction, bobble: number) {
   if (dir === 'left') { eye(-4, -8, 2, 1.6); }
   if (dir === 'right') { eye(2, -8, 2, 1.6); }
 
-  // hard-hat
-  k.drawRect({
-    pos: k.vec2(-6, -16 + bob),
-    width: 12,
-    height: 5,
-    color: k.rgb(34, 211, 238),
-    radius: 3,
-  });
-  k.drawRect({
-    pos: k.vec2(-7, -12 + bob),
-    width: 14,
-    height: 1.5,
-    color: k.rgb(8, 145, 178),
-  });
-  // brilho do hat
-  k.drawRect({
-    pos: k.vec2(-3, -15 + bob),
-    width: 3,
-    height: 1,
-    color: k.rgb(255, 255, 255),
-    opacity: 0.6,
-  });
+  // hat (opcional — preset 'none' não desenha)
+  if (hat.rgb) {
+    k.drawRect({ pos: k.vec2(-6, -16 + bob), width: 12, height: 5, color: k.rgb(...hat.rgb), radius: 3 });
+    if (hat.shade) {
+      k.drawRect({ pos: k.vec2(-7, -12 + bob), width: 14, height: 1.5, color: k.rgb(...hat.shade) });
+    }
+    k.drawRect({ pos: k.vec2(-3, -15 + bob), width: 3, height: 1, color: k.rgb(255, 255, 255), opacity: 0.6 });
+  }
 }
 
 // ===== Object node (renderiza ícone segundo o tipo) =====
 function makeObjectNode(k: K, o: Objeto) {
-  // EDUCATIONAL: cada "objeto" do banco tem uma identidade visual: server / db / cache / router.
+  // EDUCATIONAL: drop-from-sky entrance. O objeto cai do alto + bounce + pulse.
   const cx = o.pos_x * TILE + TILE / 2;
   const cy = o.pos_y * TILE + TILE / 2;
   const node = k.add([
-    k.pos(cx, cy),
+    k.pos(cx, cy - 80),
     k.anchor('center'),
-    k.scale(0),
+    k.scale(0.3),
+    k.opacity(0),
     k.z(0),
     {
       objStatus: o.status,
       objTipo: o.tipo,
-      // EDUCATIONAL: tileX/tileY ficam no nó pra detectar tmp→real swap em syncObjects
       tileX: o.pos_x,
       tileY: o.pos_y,
       pulseT: 0,
@@ -1414,8 +1489,99 @@ function makeObjectNode(k: K, o: Objeto) {
       },
     },
   ]);
-  k.tween(0, 1, 0.32, (v: number) => (node.scale = k.vec2(v, v)), k.easings.easeOutBack);
+  // queda + bounce + scale-up em paralelo
+  k.tween(cy - 80, cy, 0.45, (v: number) => (node.pos.y = v), k.easings.easeOutBounce);
+  k.tween(0.3, 1.15, 0.35, (v: number) => (node.scale = k.vec2(v, v)), k.easings.easeOutQuad);
+  k.wait(0.35, () => {
+    k.tween(1.15, 1, 0.18, (v: number) => (node.scale = k.vec2(v, v)), k.easings.easeOutQuad);
+  });
+  k.tween(0, 1, 0.25, (v: number) => (node.opacity = v), k.easings.easeOutQuad);
+  // shockwave no chão quando aterrissa
+  k.wait(0.4, () => spawnShockwave(k, cx, cy));
   return node;
+}
+
+// EDUCATIONAL: shockwave circular expandindo — feedback "objeto aterrissou".
+function spawnShockwave(k: K, x: number, y: number) {
+  const ring = k.add([
+    k.circle(4),
+    k.pos(x, y),
+    k.color(34, 211, 238),
+    k.opacity(0.6),
+    k.outline(2, k.rgb(255, 255, 255)),
+    k.scale(0.3),
+    k.anchor('center'),
+    k.lifespan(0.5, { fade: 0.4 }),
+    k.z(2),
+    { fill: false },
+  ]);
+  k.tween(0.3, 4, 0.45, (v: number) => (ring.scale = k.vec2(v, v)), k.easings.easeOutQuad);
+}
+
+// EDUCATIONAL: texto flutuante estilo RPG (+1 servidor, novo→ativo, etc).
+function spawnFloatingText(k: K, label: string, tileX: number, tileY: number, rgb: [number, number, number], size = 10) {
+  const x = tileX * TILE + TILE / 2;
+  const y = tileY * TILE - 4;
+  const txt = k.add([
+    k.text(label, { size }),
+    k.pos(x, y),
+    k.anchor('center'),
+    k.color(...rgb),
+    k.opacity(1),
+    k.move(k.vec2(0, -1), 28),
+    k.lifespan(1.4, { fade: 1 }),
+    k.z(7),
+  ]);
+  // pequeno overshoot no scale pra dar destaque
+  txt.scale = k.vec2(0.5, 0.5);
+  k.tween(0.5, 1.15, 0.18, (v: number) => (txt.scale = k.vec2(v, v)), k.easings.easeOutBack);
+  k.wait(0.18, () => k.tween(1.15, 1, 0.12, (v: number) => (txt.scale = k.vec2(v, v))));
+}
+
+// EDUCATIONAL: estrelas rotantes ao redor do objeto — efeito level-up.
+function spawnLevelUpStars(k: K, x: number, y: number, rgb: [number, number, number]) {
+  for (let i = 0; i < 6; i++) {
+    const angle0 = (Math.PI * 2 * i) / 6;
+    const star = k.add([
+      k.rect(3, 3, { radius: 0.5 }),
+      k.pos(x, y),
+      k.anchor('center'),
+      k.rotate(45),
+      k.color(...rgb),
+      k.opacity(1),
+      k.lifespan(0.7, { fade: 0.5 }),
+      k.z(4),
+      { t: 0, baseAngle: angle0 },
+    ]);
+    star.onUpdate(() => {
+      star.t += k.dt();
+      const r = 6 + star.t * 50;
+      star.pos = k.vec2(x + Math.cos(star.baseAngle + star.t * 6) * r, y + Math.sin(star.baseAngle + star.t * 6) * r);
+      star.angle = (star.angle ?? 0) + k.dt() * 720;
+    });
+  }
+}
+
+// EDUCATIONAL: camera shake leve. Simples deslocamento decay-exponencial.
+function cameraShake(k: K, magnitude: number, durationS: number) {
+  const cur = k.getCamPos();
+  const baseX = cur.x;
+  const baseY = cur.y;
+  let t = 0;
+  const shaker = k.add([{ update() { /* placeholder, controlled below */ } }]);
+  shaker.onUpdate(() => {
+    t += k.dt();
+    if (t >= durationS) { shaker.destroy(); return; }
+    const decay = 1 - t / durationS;
+    const dx = (Math.random() - 0.5) * 2 * magnitude * decay;
+    const dy = (Math.random() - 0.5) * 2 * magnitude * decay;
+    const cp = k.getCamPos();
+    k.setCamPos(k.vec2(cp.x + dx, cp.y + dy));
+    // restaura no fim
+    if (t + k.dt() >= durationS) {
+      k.setCamPos(k.vec2(baseX, baseY));
+    }
+  });
 }
 
 // EDUCATIONAL: status forma uma "barra de progresso" — cada UPDATE adiciona
