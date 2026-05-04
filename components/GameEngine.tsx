@@ -23,6 +23,7 @@ import {
   USER_NAME_KEY, TUTORIAL_DONE_KEY, PLAYER_CUSTOM_KEY,
 } from '@/lib/game/constants';
 import { buildSqlPreview, highlightSql } from '@/lib/game/sql';
+import { sfx } from '@/lib/game/sounds';
 
 // ============================================================================
 // Welcome flow + tutorial guiado
@@ -729,7 +730,11 @@ export default function GameEngine() {
     };
 
     cbRef.current.create = (x, y) => {
-      if (tileOcupado(x, y)) return notifyApi({ method: 'POST', status: 409, ms: 0 });
+      if (tileOcupado(x, y)) {
+        sfx.blocked();
+        return notifyApi({ method: 'POST', status: 409, ms: 0 });
+      }
+      sfx.build();
       const start = performance.now();
       const tipo = stateRef.current.tipo;
       createMut.mutate(
@@ -741,7 +746,6 @@ export default function GameEngine() {
               try { navigator.vibrate(10); } catch { }
             }
             spawnSqlBubble(kRef.current, `INSERT id=${(created as Objeto).id}`, x, y, [16, 185, 129]);
-            // floating "+1 servidor" estilo RPG + camera shake leve
             spawnFloatingText(kRef.current, `+1 ${tipo}`, x, y - 1, [16, 185, 129], 11);
             cameraShake(kRef.current, 1.5, 0.18);
             advanceIf('create', 'read');
@@ -752,6 +756,7 @@ export default function GameEngine() {
       );
     };
     cbRef.current.update = (obj) => {
+      sfx.update();
       const start = performance.now();
       const next = STATUS_NEXT[obj.status];
       const fromStatus = obj.status;
@@ -773,6 +778,7 @@ export default function GameEngine() {
       );
     };
     cbRef.current.del = (obj) => {
+      sfx.delete();
       const start = performance.now();
       deleteMut.mutate(obj.id as number, {
         onSuccess: () => {
@@ -787,6 +793,7 @@ export default function GameEngine() {
       });
     };
     cbRef.current.read = () => {
+      sfx.read();
       notifyApi({ method: 'GET', status: 200, ms: 0 });
       spawnSqlBubble(kRef.current, `SELECT *`, 0, 0, [34, 211, 238]);
       spawnFloatingText(kRef.current, `SELECT *`, 0, -1, [34, 211, 238], 10);
@@ -864,6 +871,7 @@ export default function GameEngine() {
       const player = K_.add([
         K_.pos(5 * TILE + TILE / 2, 9 * TILE + TILE / 2),
         K_.anchor('center'),
+        K_.scale(1.5),
         K_.z(5),
         {
           targetPos: K_.vec2(5 * TILE + TILE / 2, 9 * TILE + TILE / 2),
@@ -889,6 +897,7 @@ export default function GameEngine() {
             }
             // estado happy: ativa enquanto tutorialStep === 'done'
             if (useGameStore.getState().tutorialStep === 'done') {
+              if (this.action !== 'happy') sfx.happy();
               this.action = 'happy';
               this.happyT += K_.dt();
             } else if (this.action === 'happy') {
@@ -1056,6 +1065,7 @@ export default function GameEngine() {
           return;
         }
         if (nx === player.tileX && ny === player.tileY) return;
+        sfx.move();
         player.tileX = nx;
         player.tileY = ny;
         player.targetPos = K_.vec2(nx * TILE + TILE / 2, ny * TILE + TILE / 2);
@@ -1095,12 +1105,22 @@ export default function GameEngine() {
           setPlayerAction('update');
           cbRef.current.update?.(obj as Objeto);
         } else if (t === 'delete') {
+          // EDUCATIONAL: NÃO deletar tmp- (objeto ainda não confirmado).
+          // Se DELETE de tmp falhar no servidor, o store reverte e o tmp volta como fantasma.
+          if (String(obj.id).startsWith('tmp-')) {
+            notifyApi({ method: 'DELETE', status: 425, ms: 0 });
+            return;
+          }
           flashTile(K_, f.x, f.y, [244, 63, 94]);
-          const node = objNodes.get(obj.id);
-          if (node) {
-            spawnDeleteParticles(K_, node.pos.x, node.pos.y);
-            try { node.destroy(); } catch { }
-            objNodes.delete(obj.id);
+          // SWEEP: destrói TODOS os obj-node no tile facing (não só o do Map).
+          // Garante limpeza visual mesmo se o Map estiver dessincronizado.
+          const allNodes = K_.get('obj-node') || [];
+          for (const n of allNodes) {
+            if (n.tileX === f.x && n.tileY === f.y) {
+              spawnDeleteParticles(K_, n.pos.x, n.pos.y);
+              try { n.destroy(); } catch { }
+              if (n.objId !== undefined) objNodes.delete(n.objId);
+            }
           }
           setPlayerAction('delete');
           cbRef.current.del?.(obj as Objeto);
@@ -1224,53 +1244,105 @@ export default function GameEngine() {
 // Drawing helpers — tema "Data Center"
 // ============================================================================
 function drawDataCenterFloor(k: K) {
-  // EDUCATIONAL: tiles em camadas — base + textura de circuito + vinheta sutil.
+  // EDUCATIONAL: piso com biomas (zonas de cor) + decorações fixas (lâmpadas
+  // pulsantes, painéis, plantas) pra dar vida ao mapa. PRNG seeded pra ficar
+  // estável entre frames mas variado o suficiente.
+  const rand = (x: number, y: number) => {
+    const s = (x * 73856093) ^ (y * 19349663);
+    return ((s % 1000) + 1000) % 1000 / 1000;
+  };
+
+  // base com biomas: 3 zonas circulares de cor (cyan/violet/emerald)
+  // que se misturam, criando "regiões" no mapa
+  const biomes: { cx: number; cy: number; r: number; rgb: [number, number, number] }[] = [
+    { cx: 4,  cy: 4,  r: 6, rgb: [22, 30, 80]  },   // zona violet
+    { cx: 16, cy: 5,  r: 5, rgb: [10, 50, 70]  },   // zona cyan
+    { cx: 10, cy: 12, r: 6, rgb: [10, 60, 50]  },   // zona emerald
+  ];
+
   for (let y = 0; y < ROWS; y++) {
     for (let x = 0; x < COLS; x++) {
       const variant = (x + y) % 2 === 0 ? 1 : 0;
-      // base
+      // mistura de cor por proximidade aos biomas
+      let r = 11 + variant * 3, g = 18 + variant * 3, b = 36 + variant * 4;
+      for (const bi of biomes) {
+        const dx = x - bi.cx, dy = y - bi.cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const inf = Math.max(0, 1 - dist / bi.r);
+        r += bi.rgb[0] * inf * 0.35;
+        g += bi.rgb[1] * inf * 0.35;
+        b += bi.rgb[2] * inf * 0.35;
+      }
       k.add([
         k.rect(TILE, TILE),
         k.pos(x * TILE, y * TILE),
-        k.color(11 + variant * 3, 18 + variant * 3, 36 + variant * 4),
+        k.color(Math.round(r), Math.round(g), Math.round(b)),
         k.z(-3),
       ]);
+
+      // borda do mapa: tijolos brilhantes
+      if (x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1) {
+        k.add([
+          k.rect(TILE, TILE),
+          k.pos(x * TILE, y * TILE),
+          k.color(40, 50, 90),
+          k.opacity(0.35),
+          k.z(-2),
+        ]);
+        // detalhe de "rebite" no canto
+        k.add([
+          k.circle(2),
+          k.pos(x * TILE + TILE / 2, y * TILE + TILE / 2),
+          k.color(167, 139, 250),
+          k.opacity(0.5),
+          k.z(-1),
+        ]);
+      }
+
+      // decorações fixas em ~12% dos tiles internos (não tocam onde player começa
+      // nem o "?" panel em (0,0)). Escolha procedural.
+      if (x > 1 && y > 1 && x < COLS - 2 && y < ROWS - 2) {
+        const seed = rand(x, y);
+        if (seed < 0.12 && !(x === 5 && y === 9)) {
+          const kind = Math.floor(seed * 1000) % 5;
+          drawFloorDecoration(k, x * TILE + TILE / 2, y * TILE + TILE / 2, kind, seed);
+          continue; // pula traço de circuito se tem decoração
+        }
+      }
+
       // micro-traço de circuito (decorativo, em ~30% dos tiles)
-      const seed = (x * 31 + y * 17) % 100;
-      if (seed < 30) {
-        const which = seed % 3;
+      const seed2 = (x * 31 + y * 17) % 100;
+      if (seed2 < 30) {
+        const which = seed2 % 3;
         if (which === 0) {
-          // linha horizontal
           k.add([
             k.rect(TILE - 8, 1),
             k.pos(x * TILE + 4, y * TILE + TILE / 2),
             k.color(34, 211, 238),
-            k.opacity(0.08),
+            k.opacity(0.1),
             k.z(-2),
           ]);
         } else if (which === 1) {
-          // L de circuito
           k.add([
             k.rect(1, TILE / 2 - 4),
             k.pos(x * TILE + TILE / 2, y * TILE + 4),
             k.color(34, 211, 238),
-            k.opacity(0.1),
+            k.opacity(0.12),
             k.z(-2),
           ]);
           k.add([
             k.rect(TILE / 2 - 4, 1),
             k.pos(x * TILE + TILE / 2, y * TILE + TILE / 2 - 1),
             k.color(34, 211, 238),
-            k.opacity(0.1),
+            k.opacity(0.12),
             k.z(-2),
           ]);
         } else {
-          // ponto/nó
           k.add([
             k.circle(1.5),
             k.pos(x * TILE + TILE / 2, y * TILE + TILE / 2),
             k.color(167, 139, 250),
-            k.opacity(0.25),
+            k.opacity(0.3),
             k.z(-2),
           ]);
         }
@@ -1298,6 +1370,127 @@ function drawDataCenterFloor(k: K) {
       });
     }
   });
+}
+
+// EDUCATIONAL: decorações fixas (não-interativas) que dão vida ao mapa.
+// 5 tipos: lâmpada pulsante, painel de servidor pequeno, terminal, planta neon, antena.
+function drawFloorDecoration(k: K, cx: number, cy: number, kind: number, seed: number) {
+  const t = (seed * 6.28) % 6.28;
+  if (kind === 0) {
+    // Lâmpada pulsante (orb cyan suspenso)
+    const lamp = k.add([
+      k.circle(4),
+      k.pos(cx, cy),
+      k.color(34, 211, 238),
+      k.opacity(0.5),
+      k.z(-1),
+      { phase: t },
+    ]);
+    lamp.onUpdate(() => {
+      const p = 0.5 + 0.4 * Math.sin(k.time() * 2 + lamp.phase);
+      lamp.opacity = p;
+    });
+    // halo
+    k.add([
+      k.circle(8),
+      k.pos(cx, cy),
+      k.color(34, 211, 238),
+      k.opacity(0.12),
+      k.z(-2),
+    ]);
+  } else if (kind === 1) {
+    // Painel de servidor pequeno (rect com LEDs)
+    k.add([
+      k.rect(14, 18, { radius: 1 }),
+      k.pos(cx - 7, cy - 9),
+      k.color(20, 30, 55),
+      k.outline(1, k.rgb(60, 80, 130)),
+      k.z(-1),
+    ]);
+    for (let i = 0; i < 3; i++) {
+      const led = k.add([
+        k.circle(1),
+        k.pos(cx - 4 + i * 3, cy + 4),
+        k.color(34, 197, 94),
+        k.z(0),
+        { phase: t + i * 0.7 },
+      ]);
+      led.onUpdate(() => {
+        led.opacity = 0.4 + 0.4 * Math.sin(k.time() * 3 + led.phase);
+      });
+    }
+  } else if (kind === 2) {
+    // Terminal/monitor (rect com tela cyan)
+    k.add([
+      k.rect(16, 12, { radius: 1 }),
+      k.pos(cx - 8, cy - 8),
+      k.color(40, 50, 80),
+      k.z(-1),
+    ]);
+    k.add([
+      k.rect(12, 8, { radius: 0.5 }),
+      k.pos(cx - 6, cy - 7),
+      k.color(34, 211, 238),
+      k.opacity(0.3),
+      k.z(0),
+    ]);
+    // base
+    k.add([
+      k.rect(6, 3),
+      k.pos(cx - 3, cy + 4),
+      k.color(40, 50, 80),
+      k.z(-1),
+    ]);
+  } else if (kind === 3) {
+    // Planta neon (3 circles empilhados)
+    k.add([
+      k.circle(3),
+      k.pos(cx, cy + 5),
+      k.color(16, 185, 129),
+      k.opacity(0.7),
+      k.z(-1),
+    ]);
+    k.add([
+      k.circle(2.5),
+      k.pos(cx - 2, cy + 1),
+      k.color(16, 185, 129),
+      k.opacity(0.6),
+      k.z(-1),
+    ]);
+    k.add([
+      k.circle(2),
+      k.pos(cx + 2, cy - 2),
+      k.color(110, 231, 183),
+      k.opacity(0.7),
+      k.z(0),
+    ]);
+  } else {
+    // Antena/torre (linha + circle no topo)
+    k.add([
+      k.rect(1, 14),
+      k.pos(cx, cy - 7),
+      k.color(167, 139, 250),
+      k.opacity(0.6),
+      k.z(-1),
+    ]);
+    const top = k.add([
+      k.circle(2.5),
+      k.pos(cx, cy - 8),
+      k.color(167, 139, 250),
+      k.z(0),
+      { phase: t },
+    ]);
+    top.onUpdate(() => {
+      top.opacity = 0.5 + 0.4 * Math.sin(k.time() * 4 + top.phase);
+    });
+    // base
+    k.add([
+      k.rect(6, 3),
+      k.pos(cx - 3, cy + 5),
+      k.color(50, 60, 100),
+      k.z(-1),
+    ]);
+  }
 }
 
 function spawnAmbientParticles(k: K) {
@@ -1442,7 +1635,8 @@ function drawDevopsSprite(
 
 // ===== Object node (renderiza ícone segundo o tipo) =====
 function makeObjectNode(k: K, o: Objeto) {
-  // EDUCATIONAL: drop-from-sky entrance. O objeto cai do alto + bounce + pulse.
+  // EDUCATIONAL: drop-from-sky entrance. Tag 'obj-node' permite varredura
+  // por tile no DELETE — garante que NENHUM fantasma sobreviva.
   const cx = o.pos_x * TILE + TILE / 2;
   const cy = o.pos_y * TILE + TILE / 2;
   const node = k.add([
@@ -1451,11 +1645,13 @@ function makeObjectNode(k: K, o: Objeto) {
     k.scale(0.3),
     k.opacity(0),
     k.z(0),
+    'obj-node',
     {
       objStatus: o.status,
       objTipo: o.tipo,
       tileX: o.pos_x,
       tileY: o.pos_y,
+      objId: o.id,
       pulseT: 0,
       update() {
         this.pulseT += k.dt() * 2;
