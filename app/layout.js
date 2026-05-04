@@ -25,9 +25,6 @@ export const viewport = {
 export default function RootLayout({ children }) {
   return (
     <html lang="pt-BR">
-      <head>
-        <link rel="apple-touch-icon" href="/icon-192.png" />
-      </head>
       <body className="antialiased">
         <Providers>{children}</Providers>
       </body>

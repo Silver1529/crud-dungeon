@@ -33,6 +33,11 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // EDUCATIONAL: avisa o Vercel/Next pra incluir o CA bundle do AWS RDS no deploy.
+  // Sem isso o serverless function não acha o arquivo em runtime.
+  outputFileTracingIncludes: {
+    '/api/**/*': ['./certs/**'],
+  },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
   },
