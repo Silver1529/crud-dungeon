@@ -46,7 +46,7 @@ type K = any;
 // ============================================================================
 // Constants
 // ============================================================================
-const TILE = 36;
+const TILE = 48;
 const COLS = 20;
 const ROWS = 15;
 const W = COLS * TILE;
@@ -289,13 +289,26 @@ function NameStep({
   return (
     <ModalShell>
       <div className="flex flex-col items-center text-center mb-4">
-        <PlayerPreview custom={custom} />
-        <h2 className="font-mono text-xl text-cyan-300 flex items-center gap-2 mt-2">
-          <Sparkles className="w-5 h-5" /> Bem-vindo
-        </h2>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/favicon.ico"
+          alt="CRUD Dungeon"
+          width={180}
+          height={180}
+          className="rounded-2xl mb-3 shadow-[0_0_60px_rgba(34,211,238,0.4)] ring-2 ring-cyan-400/30"
+        />
+        <div className="flex items-center gap-3 -mt-2">
+          <PlayerPreview custom={custom} />
+          <div className="text-left">
+            <h2 className="font-mono text-xl text-cyan-300 flex items-center gap-2">
+              <Sparkles className="w-5 h-5" /> Personalize seu herói
+            </h2>
+            <p className="text-[11px] text-slate-400 font-mono mt-1">customize as cores ↓</p>
+          </div>
+        </div>
       </div>
       <p className="text-slate-300 text-sm leading-relaxed mb-4 text-center">
-        Escolhe um nome e personaliza seu personagem. Vou te guiar pelas 4 operações de CRUD, uma por vez.
+        Escolhe um nome e o visual do seu personagem. Vou te guiar pelas 4 operações de CRUD, uma por vez.
       </p>
 
       <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3 mb-3 space-y-2">
@@ -968,7 +981,10 @@ export default function GameEngine() {
       // Partículas ambiente — pontos lentos como pacotes de dados
       spawnAmbientParticles(K_);
 
-      // Player
+      // Player com sistema de "action" pra animações contextuais.
+      // EDUCATIONAL: action='idle'|'build'|'update'|'delete'|'happy'.
+      // Quando o jogador interage, action vira o tipo da ação por X segundos
+      // e o draw reflete (martelando, deletando, comemorando).
       const player = K_.add([
         K_.pos(5 * TILE + TILE / 2, 9 * TILE + TILE / 2),
         K_.anchor('center'),
@@ -982,17 +998,32 @@ export default function GameEngine() {
           frameTime: 0,
           moving: false,
           bobble: 0,
+          action: 'idle' as 'idle' | 'build' | 'update' | 'delete' | 'happy',
+          actionT: 0,
+          happyT: 0,
           update() {
             this.pos.x = K_.lerp(this.pos.x, this.targetPos.x, 0.22);
             this.pos.y = K_.lerp(this.pos.y, this.targetPos.y, 0.22);
             this.frameTime += K_.dt();
             this.bobble += K_.dt() * 4;
+            // timer da ação atual
+            if (this.action !== 'idle' && this.action !== 'happy') {
+              this.actionT += K_.dt();
+              if (this.actionT > 0.4) { this.action = 'idle'; this.actionT = 0; }
+            }
+            // estado happy: ativa enquanto tutorialStep === 'done'
+            if (useGameStore.getState().tutorialStep === 'done') {
+              this.action = 'happy';
+              this.happyT += K_.dt();
+            } else if (this.action === 'happy') {
+              this.action = 'idle';
+              this.happyT = 0;
+            }
             if (this.frameTime > 0.13) {
               this.frameTime = 0;
               this.frame = this.moving ? (this.frame + 1) % 4 : 0;
             }
             this.moving = false;
-            // facing
             const dx = this.dir === 'right' ? 1 : this.dir === 'left' ? -1 : 0;
             const dy = this.dir === 'down' ? 1 : this.dir === 'up' ? -1 : 0;
             const fx = Math.max(0, Math.min(COLS - 1, this.tileX + dx));
@@ -1000,10 +1031,12 @@ export default function GameEngine() {
             stateRef.current.facing = { x: fx, y: fy };
           },
           draw() {
-            drawDevopsSprite(K_, this.frame, this.dir, this.bobble, stateRef.current.custom);
+            drawDevopsSprite(K_, this.frame, this.dir, this.bobble, stateRef.current.custom, this.action, this.actionT, this.happyT);
           },
         },
       ]);
+      // expor pra interact() poder setar action
+      kRef.current.__player = player;
 
       // Indicador da tile à frente — anel pulsante cyan + cantos animados
       K_.add([
@@ -1156,6 +1189,12 @@ export default function GameEngine() {
         if (cur === 'move') useGameStore.getState().setTutorialStep('create');
       };
 
+      const setPlayerAction = (a: 'idle' | 'build' | 'update' | 'delete') => {
+        if (player.action === 'happy') return; // não interrompe celebração
+        player.action = a;
+        player.actionT = 0;
+      };
+
       const interact = () => {
         const f = stateRef.current.facing;
         if (f.x === 0 && f.y === 0) {
@@ -1169,6 +1208,7 @@ export default function GameEngine() {
           if (t === 'build') {
             spawnCreateParticles(K_, f.x * TILE + TILE / 2, f.y * TILE + TILE / 2);
             flashTile(K_, f.x, f.y, [16, 185, 129]);
+            setPlayerAction('build');
             cbRef.current.create?.(f.x, f.y);
           }
           return;
@@ -1176,18 +1216,17 @@ export default function GameEngine() {
         if (t === 'upgrade') {
           flashTile(K_, f.x, f.y, [251, 191, 36]);
           spawnUpdateRing(K_, f.x * TILE + TILE / 2, f.y * TILE + TILE / 2);
+          setPlayerAction('update');
           cbRef.current.update?.(obj as Objeto);
         } else if (t === 'delete') {
           flashTile(K_, f.x, f.y, [244, 63, 94]);
-          // EDUCATIONAL: remove o nó visualmente NA HORA, sem esperar o servidor.
-          // O optimistic update no React Query / Zustand vai concordar logo em seguida.
-          // Se o DELETE falhar no servidor (raro), o syncObjects recria pelo store revertido.
           const node = objNodes.get(obj.id);
           if (node) {
             spawnDeleteParticles(K_, node.pos.x, node.pos.y);
             try { node.destroy(); } catch { }
             objNodes.delete(obj.id);
           }
+          setPlayerAction('delete');
           cbRef.current.del?.(obj as Objeto);
         }
       };
@@ -1416,51 +1455,112 @@ function spawnAmbientParticle(k: K) {
 }
 
 // ===== Player (DevOps) =====
-function drawDevopsSprite(k: K, frame: number, dir: Direction, bobble: number, custom: PlayerCustom) {
-  // EDUCATIONAL: sprite procedural, 4 frames. Cores customizáveis via PlayerCustom.
+type PlayerAction = 'idle' | 'build' | 'update' | 'delete' | 'happy';
+
+function drawDevopsSprite(
+  k: K, frame: number, dir: Direction, bobble: number, custom: PlayerCustom,
+  action: PlayerAction = 'idle', actionT: number = 0, happyT: number = 0,
+) {
+  // EDUCATIONAL: sprite procedural com 5 modos de ação. Cores customizáveis.
   const shirt = PLAYER_PRESETS.shirt[custom.shirt];
   const hat = PLAYER_PRESETS.hat[custom.hat];
   const skin = PLAYER_PRESETS.skin[custom.skin];
 
-  // sombra
+  // happy = pulinhos sin + corações ao redor
+  const happyBounce = action === 'happy' ? Math.abs(Math.sin(happyT * 6)) * 5 : 0;
+  // build = recuo + braço subindo (martelo). actionT 0..0.4
+  const buildPhase = action === 'build' ? Math.sin((actionT / 0.4) * Math.PI) : 0;
+  // delete = leve crouch
+  const crouch = action === 'delete' ? Math.sin((actionT / 0.4) * Math.PI) * 2 : 0;
+  // update = vibração rápida
+  const updateVib = action === 'update' ? Math.sin(actionT * 40) * 0.7 : 0;
+
+  // sombra (achata em happy bounce)
   k.drawEllipse({
-    pos: k.vec2(0, 14), radiusX: 9, radiusY: 2.5,
-    color: k.rgb(0, 0, 0), opacity: 0.5,
+    pos: k.vec2(0 + updateVib, 14 + happyBounce),
+    radiusX: 9 - happyBounce * 0.3, radiusY: 2.5 - happyBounce * 0.15,
+    color: k.rgb(0, 0, 0), opacity: 0.5 - happyBounce * 0.04,
   });
 
-  const bob = Math.sin(bobble) * 0.7;
+  const offY = -happyBounce + crouch; // sobe em happy, desce em delete
+  const bob = Math.sin(bobble) * 0.7 + offY;
   const legOffset = [0, 1.5, 0, -1.5][frame] ?? 0;
 
-  // pernas
-  k.drawRect({ pos: k.vec2(-5, 7 + legOffset), width: 4, height: 7, color: k.rgb(15, 23, 42), radius: 1 });
-  k.drawRect({ pos: k.vec2(1, 7 - legOffset), width: 4, height: 7, color: k.rgb(15, 23, 42), radius: 1 });
+  // pernas (mais juntas em delete)
+  const legSpread = action === 'delete' ? 0 : 0;
+  k.drawRect({ pos: k.vec2(-5 - legSpread + updateVib, 7 + legOffset + offY), width: 4, height: 7, color: k.rgb(15, 23, 42), radius: 1 });
+  k.drawRect({ pos: k.vec2(1 + legSpread + updateVib, 7 - legOffset + offY), width: 4, height: 7, color: k.rgb(15, 23, 42), radius: 1 });
 
   // corpo (camisa)
-  k.drawRect({ pos: k.vec2(-7, -3 + bob), width: 14, height: 11, color: k.rgb(...shirt.rgb), radius: 2 });
-  // estampa central
-  k.drawRect({ pos: k.vec2(-1, 0 + bob), width: 2, height: 5, color: k.rgb(...shirt.accent), opacity: 0.85 });
-  // braços
-  k.drawRect({ pos: k.vec2(-9, -2 + bob + (frame % 2 === 0 ? 0 : 1)), width: 3, height: 8, color: k.rgb(...shirt.rgb), radius: 1 });
-  k.drawRect({ pos: k.vec2(6, -2 + bob - (frame % 2 === 0 ? 0 : 1)), width: 3, height: 8, color: k.rgb(...shirt.rgb), radius: 1 });
+  k.drawRect({ pos: k.vec2(-7 + updateVib, -3 + bob), width: 14, height: 11, color: k.rgb(...shirt.rgb), radius: 2 });
+  k.drawRect({ pos: k.vec2(-1 + updateVib, 0 + bob), width: 2, height: 5, color: k.rgb(...shirt.accent), opacity: 0.85 });
 
-  // cabeça (skin)
-  k.drawRect({ pos: k.vec2(-5, -12 + bob), width: 10, height: 9, color: k.rgb(...skin.rgb), radius: 2 });
+  // braços — gestos por action:
+  //  build: braço direito sobe alto (martelo)
+  //  delete: ambos braços pra baixo (catando)
+  //  happy: ambos pra cima (comemorando)
+  //  update: tremem
+  const armRaise = action === 'build' ? buildPhase * 8 : action === 'happy' ? 6 : 0;
+  const armRaiseLeft = action === 'happy' ? 6 : 0;
+  k.drawRect({
+    pos: k.vec2(-9 + updateVib, -2 + bob + (frame % 2 === 0 ? 0 : 1) - armRaiseLeft),
+    width: 3, height: 8, color: k.rgb(...shirt.rgb), radius: 1,
+  });
+  k.drawRect({
+    pos: k.vec2(6 + updateVib, -2 + bob - (frame % 2 === 0 ? 0 : 1) - armRaise),
+    width: 3, height: 8, color: k.rgb(...shirt.rgb), radius: 1,
+  });
 
-  // olhos
+  // martelo na mão direita quando build
+  if (action === 'build' && buildPhase > 0.2) {
+    const hammerY = -2 + bob - armRaise - 4;
+    k.drawRect({ pos: k.vec2(5, hammerY), width: 5, height: 4, color: k.rgb(120, 120, 130), radius: 1 });
+    k.drawRect({ pos: k.vec2(7, hammerY + 4), width: 1.5, height: 5, color: k.rgb(101, 67, 33) });
+  }
+
+  // cabeça
+  k.drawRect({ pos: k.vec2(-5 + updateVib, -12 + bob), width: 10, height: 9, color: k.rgb(...skin.rgb), radius: 2 });
+
+  // olhos — happy = olhos fechados/sorrindo
   const eye = (x: number, y: number, w = 1.6, h = 1.6) =>
-    k.drawRect({ pos: k.vec2(x, y + bob), width: w, height: h, color: k.rgb(15, 23, 42) });
-  if (dir === 'down') { eye(-3, -8); eye(2, -8); }
-  if (dir === 'up') { eye(-3, -10, 1.6, 1); eye(2, -10, 1.6, 1); }
-  if (dir === 'left') { eye(-4, -8, 2, 1.6); }
-  if (dir === 'right') { eye(2, -8, 2, 1.6); }
+    k.drawRect({ pos: k.vec2(x + updateVib, y + bob), width: w, height: h, color: k.rgb(15, 23, 42) });
+  if (action === 'happy') {
+    // ^ ^ olhos felizes
+    k.drawRect({ pos: k.vec2(-4 + updateVib, -8 + bob), width: 3, height: 0.8, color: k.rgb(15, 23, 42) });
+    k.drawRect({ pos: k.vec2(1 + updateVib, -8 + bob), width: 3, height: 0.8, color: k.rgb(15, 23, 42) });
+    // sorriso
+    k.drawRect({ pos: k.vec2(-2 + updateVib, -5 + bob), width: 4, height: 1, color: k.rgb(15, 23, 42), radius: 0.5 });
+  } else {
+    if (dir === 'down') { eye(-3, -8); eye(2, -8); }
+    if (dir === 'up') { eye(-3, -10, 1.6, 1); eye(2, -10, 1.6, 1); }
+    if (dir === 'left') { eye(-4, -8, 2, 1.6); }
+    if (dir === 'right') { eye(2, -8, 2, 1.6); }
+  }
 
-  // hat (opcional — preset 'none' não desenha)
+  // hat
   if (hat.rgb) {
-    k.drawRect({ pos: k.vec2(-6, -16 + bob), width: 12, height: 5, color: k.rgb(...hat.rgb), radius: 3 });
+    k.drawRect({ pos: k.vec2(-6 + updateVib, -16 + bob), width: 12, height: 5, color: k.rgb(...hat.rgb), radius: 3 });
     if (hat.shade) {
-      k.drawRect({ pos: k.vec2(-7, -12 + bob), width: 14, height: 1.5, color: k.rgb(...hat.shade) });
+      k.drawRect({ pos: k.vec2(-7 + updateVib, -12 + bob), width: 14, height: 1.5, color: k.rgb(...hat.shade) });
     }
-    k.drawRect({ pos: k.vec2(-3, -15 + bob), width: 3, height: 1, color: k.rgb(255, 255, 255), opacity: 0.6 });
+    k.drawRect({ pos: k.vec2(-3 + updateVib, -15 + bob), width: 3, height: 1, color: k.rgb(255, 255, 255), opacity: 0.6 });
+  }
+
+  // happy: corações flutuando ao redor
+  if (action === 'happy') {
+    for (let i = 0; i < 3; i++) {
+      const ht = (happyT + i * 0.7) % 2;
+      const angle = (i * Math.PI * 2) / 3 + happyT * 0.5;
+      const r = 14 + ht * 12;
+      const opacity = Math.max(0, 1 - ht / 2);
+      k.drawRect({
+        pos: k.vec2(Math.cos(angle) * r - 1.5, Math.sin(angle) * r - 18 - 1.5),
+        width: 3, height: 3,
+        color: k.rgb(244, 63, 94),
+        opacity: opacity * 0.9,
+        radius: 1.5,
+      });
+    }
   }
 }
 
@@ -1595,22 +1695,48 @@ function drawObjectByType(k: K, tipo: Tipo, status: Status, pulseT: number) {
   const blink = status === 'critico' ? 0.5 + 0.5 * Math.sin(pulseT * 4) : 1;
   const isMax = level === 3;
 
-  // Halo de status (atrás)
+  // EDUCATIONAL: SIZE_SCALE cresce 1.0 → 1.25 conforme o item evolui.
+  // Faz o objeto VISUALMENTE crescer a cada UPDATE (não só mudar cor).
+  const sizeScale = 1 + level * 0.08;
+  // GLOW pulsante intensifica com level
+  const glowOpacity = 0.05 + level * 0.05;
+  // Faíscas ambiente em level >= 2 (saem do objeto continuamente)
+  if (level >= 2) {
+    const sparkN = level === 3 ? 4 : 2;
+    for (let i = 0; i < sparkN; i++) {
+      const ang = pulseT * 1.5 + (i * Math.PI * 2) / sparkN;
+      const r = 14 + Math.sin(pulseT * 3 + i) * 3;
+      k.drawCircle({
+        pos: k.vec2(Math.cos(ang) * r, Math.sin(ang) * r),
+        radius: 1 + level * 0.2,
+        color: k.rgb(...t),
+        opacity: 0.4 + 0.4 * Math.abs(Math.sin(pulseT * 4 + i)),
+      });
+    }
+  }
+  // GLOW base atrás do halo
+  k.drawCircle({
+    pos: k.vec2(0, 0),
+    radius: (TILE - 4) / 2 * sizeScale,
+    color: k.rgb(...t),
+    opacity: glowOpacity * blink,
+  });
+
+  // Halo de status (cresce com level via sizeScale)
+  const haloW = (TILE - 6) * sizeScale;
   k.drawRect({
-    pos: k.vec2(-(TILE - 6) / 2, -(TILE - 6) / 2),
-    width: TILE - 6,
-    height: TILE - 6,
+    pos: k.vec2(-haloW / 2, -haloW / 2),
+    width: haloW, height: haloW,
     color: k.rgb(s[0], s[1], s[2]),
-    opacity: 0.18 * blink,
+    opacity: 0.18 * blink + level * 0.04,
     radius: 6,
   });
-  // Outline status
+  // Outline status (mais grosso com level)
   k.drawRect({
-    pos: k.vec2(-(TILE - 6) / 2, -(TILE - 6) / 2),
-    width: TILE - 6,
-    height: TILE - 6,
+    pos: k.vec2(-haloW / 2, -haloW / 2),
+    width: haloW, height: haloW,
     fill: false,
-    outline: { width: 2, color: k.rgb(s[0], s[1], s[2]), opacity: 0.85 * blink },
+    outline: { width: 2 + level * 0.5, color: k.rgb(s[0], s[1], s[2]), opacity: 0.85 * blink },
     radius: 6,
   });
   // Glow extra quando crítico (status máximo)
