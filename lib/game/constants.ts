@@ -3,13 +3,15 @@
 // componentes React (Toolbar, NameStep, etc). Manter aqui evita duplicação
 // e deixa o GameEngine.tsx focado em orquestração.
 import type { ComponentType } from 'react';
-import { Hammer, Wrench, Trash2, Server, Database, Zap, Network } from 'lucide-react';
+import { Hammer, Wrench, Trash2, Search, Server, Database, Zap, Network } from 'lucide-react';
 
 // ===== Domínio do jogo =====
 export type Tipo = 'servidor' | 'banco' | 'cache' | 'router';
-export type Tool = 'build' | 'upgrade' | 'delete';
+export type Tool = 'build' | 'upgrade' | 'delete' | 'inspect';
 export type Status = 'novo' | 'ativo' | 'upgrade' | 'critico';
 export type Direction = 'up' | 'down' | 'left' | 'right';
+// Nível visual da casa: 1=base, 2=upgrade1, 3=upgrade2 (cap).
+export type Level = 1 | 2 | 3;
 
 export interface Objeto {
   id: number | string;
@@ -17,6 +19,7 @@ export interface Objeto {
   status: Status;
   pos_x: number;
   pos_y: number;
+  level?: number; // server sempre devolve, optional só pra compat com payload tmp- antigo.
 }
 
 export interface FacingTile { x: number; y: number; }
@@ -46,6 +49,24 @@ export const STATUS_META: Record<Status, { color: [number, number, number]; labe
   critico: { color: [239, 68, 68],   label: 'critico' },
 };
 
+// EDUCATIONAL: nível visual da casa. Sprites em /public:
+//   level 1 → casa.png      (simples)
+//   level 2 → casav2.png    (intermediária)
+//   level 3 → casa v3.png   (avançada — note o espaço no nome)
+export const LEVEL_META: Record<Level, { sprite: string; label: string; emoji: string; color: [number, number, number] }> = {
+  1: { sprite: '/casa.png',        label: 'simples',       emoji: '🏠', color: [148, 163, 184] },
+  2: { sprite: '/casav2.png',      label: 'intermediária', emoji: '🏡', color: [251, 191, 36] },
+  3: { sprite: '/casa%20v3.png',   label: 'avançada',      emoji: '🏛️', color: [167, 139, 250] },
+};
+
+export const STATUS_BY_LEVEL: Record<Level, Status> = {
+  1: 'novo',
+  2: 'ativo',
+  3: 'upgrade',
+};
+
+// kept for backward-compat: o status agora é derivado do level pelo server.
+// Mantemos o mapping pra código antigo (logs, animations) que ainda lê status.
 export const STATUS_NEXT: Record<Status, Status> = {
   novo: 'ativo',
   ativo: 'upgrade',
@@ -60,14 +81,15 @@ export const STATUS_LEVEL: Record<Status, number> = {
 export const TOOL_META: Record<Tool, {
   label: string;
   icon: ComponentType<{ className?: string }>;
-  verb: 'POST' | 'PUT' | 'DELETE';
-  sqlKeyword: 'INSERT' | 'UPDATE' | 'DELETE';
-  color: 'emerald' | 'amber' | 'rose';
+  verb: 'POST' | 'PUT' | 'DELETE' | 'GET';
+  sqlKeyword: 'INSERT' | 'UPDATE' | 'DELETE' | 'SELECT';
+  color: 'emerald' | 'amber' | 'rose' | 'cyan';
   hint: string;
 }> = {
-  build:   { label: 'BUILD',   icon: Hammer, verb: 'POST',   sqlKeyword: 'INSERT', color: 'emerald', hint: 'Criar novo registro no banco (CREATE)' },
-  upgrade: { label: 'UPGRADE', icon: Wrench, verb: 'PUT',    sqlKeyword: 'UPDATE', color: 'amber',   hint: 'Modificar status de um registro existente (UPDATE)' },
-  delete:  { label: 'DELETE',  icon: Trash2, verb: 'DELETE', sqlKeyword: 'DELETE', color: 'rose',    hint: 'Apagar registro do banco (DELETE)' },
+  build:   { label: 'BUILD',   icon: Hammer, verb: 'POST',   sqlKeyword: 'INSERT', color: 'emerald', hint: 'Construir uma casa nova (CREATE · INSERT)' },
+  upgrade: { label: 'UPGRADE', icon: Wrench, verb: 'PUT',    sqlKeyword: 'UPDATE', color: 'amber',   hint: 'Evoluir a casa para o próximo nível (UPDATE)' },
+  delete:  { label: 'DELETE',  icon: Trash2, verb: 'DELETE', sqlKeyword: 'DELETE', color: 'rose',    hint: 'Apagar a casa do banco (DELETE)' },
+  inspect: { label: 'INSPECT', icon: Search, verb: 'GET',    sqlKeyword: 'SELECT', color: 'cyan',    hint: 'Ler os dados desta casa (READ · SELECT WHERE id=...)' },
 };
 
 export const COLOR_MAP = {
@@ -115,3 +137,10 @@ export type ActiveTutStep = Exclude<TutStep, 'name' | 'intro' | 'off'>;
 export const USER_NAME_KEY = 'crud_dungeon_user_v1';
 export const TUTORIAL_DONE_KEY = 'crud_dungeon_tutorial_done_v1';
 export const PLAYER_CUSTOM_KEY = 'crud_dungeon_player_v1';
+export const QUIZ_DONE_KEY = 'crud_dungeon_quiz_done_v1';
+
+// ===== Helpers para nivel =====
+export function clampLevel(n: number | undefined): Level {
+  const v = Math.max(1, Math.min(3, Math.floor(n ?? 1)));
+  return v as Level;
+}

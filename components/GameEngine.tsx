@@ -5,22 +5,25 @@
 // Você vê o SQL antes (preview) e depois (no painel CRUD Live à direita).
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, BookOpen, ChevronRight, Keyboard } from 'lucide-react';
+import { Sparkles, BookOpen, ChevronRight, Keyboard, Search, MapPin, Hash, X } from 'lucide-react';
 import { useGameStore } from '@/lib/store';
 import {
   useObjetos,
   useCreateObjeto,
   useUpdateObjeto,
   useDeleteObjeto,
+  useInspectObjeto,
 } from '@/lib/queries';
 import { notifyApi } from './ui/Toast';
+import QuizModal from './QuizModal';
 import {
   type Tipo, type Tool, type Status, type Direction, type Objeto, type FacingTile, type K,
-  type PlayerCustom, type ShirtKey, type HatKey, type SkinKey,
+  type Level, type PlayerCustom, type ShirtKey, type HatKey, type SkinKey,
   type TutStep, type ActiveTutStep,
   TILE, COLS, ROWS, W, H,
-  TIPO_META, STATUS_META, STATUS_NEXT, STATUS_LEVEL, TOOL_META, COLOR_MAP, PLAYER_PRESETS,
-  USER_NAME_KEY, TUTORIAL_DONE_KEY, PLAYER_CUSTOM_KEY,
+  TIPO_META, STATUS_META, LEVEL_META, TOOL_META, COLOR_MAP, PLAYER_PRESETS,
+  USER_NAME_KEY, TUTORIAL_DONE_KEY, PLAYER_CUSTOM_KEY, QUIZ_DONE_KEY,
+  clampLevel,
 } from '@/lib/game/constants';
 import { buildSqlPreview, highlightSql } from '@/lib/game/sql';
 import { sfx } from '@/lib/game/sounds';
@@ -29,10 +32,10 @@ import { sfx } from '@/lib/game/sounds';
 // Welcome flow + tutorial guiado
 // ============================================================================
 const CRUD_CARDS = [
-  { letter: 'C', name: 'CREATE', verb: 'POST', sql: 'INSERT INTO ...', color: 'emerald' as const, desc: 'Adicionar uma linha nova na tabela. No jogo: ferramenta BUILD num quadrado vazio.' },
-  { letter: 'R', name: 'READ', verb: 'GET', sql: 'SELECT * FROM ...', color: 'cyan' as const, desc: 'Ler o que está salvo. No jogo: vá até o quadrado "?" no canto superior esquerdo.' },
-  { letter: 'U', name: 'UPDATE', verb: 'PUT', sql: 'UPDATE ... SET ...', color: 'amber' as const, desc: 'Mudar uma linha existente. No jogo: ferramenta UPGRADE num objeto seu.' },
-  { letter: 'D', name: 'DELETE', verb: 'DELETE', sql: 'DELETE FROM ...', color: 'rose' as const, desc: 'Apagar uma linha. No jogo: ferramenta DELETE num objeto seu.' },
+  { letter: 'C', name: 'CREATE', verb: 'POST',   sql: 'INSERT INTO ...', color: 'emerald' as const, desc: 'Construir uma casa nova no mapa. Cada casa = uma linha nova na tabela.' },
+  { letter: 'R', name: 'READ',   verb: 'GET',    sql: 'SELECT * FROM ...', color: 'cyan'    as const, desc: 'Ler dados. Use o "?" pra ver TODAS, ou INSPECT pra ver uma casa específica.' },
+  { letter: 'U', name: 'UPDATE', verb: 'PUT',    sql: 'UPDATE ... SET ...', color: 'amber'   as const, desc: 'Evoluir a casa nível 1 → 2 → 3. Cada UPDATE deixa a casa mais bonita.' },
+  { letter: 'D', name: 'DELETE', verb: 'DELETE', sql: 'DELETE FROM ...', color: 'rose'    as const, desc: 'Demolir a casa. Apaga PERMANENTE — a linha some do banco.' },
 ];
 
 const TUTORIAL_STEPS: Record<ActiveTutStep, {
@@ -40,28 +43,57 @@ const TUTORIAL_STEPS: Record<ActiveTutStep, {
   color: 'cyan' | 'emerald' | 'amber' | 'rose' | 'violet';
 }> = {
   move: {
-    num: 1, total: 5, title: 'Mover · primeiro passo', color: 'cyan',
-    body: (n) => `${n}, antes de tudo: use ↑↓←→ ou WASD pra mexer o boneco. O quadrado cyan na sua frente é o "tile alvo" — toda ação vai acontecer LÁ, não onde você está.`,
+    num: 1, total: 5, title: '1. Mover · achar o tile alvo', color: 'cyan',
+    body: (n) =>
+      `Olá, ${n}! Use as setas ↑↓←→ ou WASD pra andar. O quadradinho ` +
+      `CYAN na sua frente é o "tile alvo" — toda ação vai rodar EM CIMA dele, ` +
+      `nunca onde o boneco está parado. Anda um pouco pra liberar o próximo passo.`,
   },
   create: {
-    num: 2, total: 5, title: 'CREATE · INSERT INTO', color: 'emerald',
-    body: (n) => `${n}, vá até um quadrado VAZIO e aperte Espaço. Isso roda INSERT INTO game_objects (...) VALUES (...) no MySQL. É como adicionar uma linha nova numa planilha — só que num banco real, na AWS. O id é gerado automático pelo banco (AUTO_INCREMENT).`,
+    num: 2, total: 5, title: '2. CREATE · construa uma casa (INSERT)', color: 'emerald',
+    body: (n) =>
+      `Beleza ${n}, agora aperta a tecla 1 (ou clica em [BUILD] no topo) e ` +
+      `encara um quadrado VAZIO. Quando bater Espaço, roda este SQL real no MySQL:\n` +
+      `   INSERT INTO game_objects (tipo, status, pos_x, pos_y, level)\n` +
+      `   VALUES ('servidor', 'novo', X, Y, 1);\n` +
+      `Isso cria UMA linha nova na tabela. O 'id' o banco gera sozinho (AUTO_INCREMENT). ` +
+      `Sua primeira 🏠 casa nível 1 vai aparecer onde você apontou.`,
   },
   read: {
-    num: 3, total: 5, title: 'READ · SELECT * FROM', color: 'cyan',
-    body: (n) => `${n}, agora vá ao "?" no canto superior esquerdo e aperte Espaço. Isso roda SELECT * FROM game_objects — lê TODAS as linhas que você já criou. É a operação mais comum: 90% das ações em apps reais são leitura.`,
+    num: 3, total: 5, title: '3. READ · inspecione a casa (SELECT WHERE)', color: 'cyan',
+    body: (n) =>
+      `Mandou bem ${n}! Agora aperta a tecla 4 (ou [INSPECT] no topo) e encara ` +
+      `a sua casa. Espaço dispara este SQL:\n` +
+      `   SELECT id, tipo, status, pos_x, pos_y, level\n` +
+      `   FROM game_objects WHERE id = X;\n` +
+      `O modal mostra a LINHA crua do banco — exatamente como ela está armazenada. ` +
+      `READ-detalhe é o que acontece quando você clica num produto numa loja online.`,
   },
   update: {
-    num: 4, total: 5, title: 'UPDATE · alterar registro', color: 'amber',
-    body: (n) => `${n}, escolha UPGRADE (atalho: 2), encare um objeto seu e aperte Espaço. Roda UPDATE game_objects SET status='...' WHERE id=X. O status evolui novo→ativo→upgrade→critico, e o ícone CRESCE com o nível. UPDATE sem WHERE seria desastre — afetaria TODAS as linhas.`,
+    num: 4, total: 5, title: '4. UPDATE · evolua sua casa (UPDATE WHERE)', color: 'amber',
+    body: (n) =>
+      `Boa ${n}! Tecla 2 (ou [UPGRADE]), encara sua casa, Espaço. Roda:\n` +
+      `   UPDATE game_objects SET level = level + 1\n` +
+      `   WHERE id = X;\n` +
+      `Sua 🏠 vira 🏡 e depois 🏛️ (cap nível 3). ATENÇÃO: o WHERE é o que ` +
+      `protege — sem ele, esse SQL atualizaria TODAS as casas do banco. ` +
+      `UPDATE sem WHERE = bug clássico que já demitiu gente.`,
   },
   delete: {
-    num: 5, total: 5, title: 'DELETE · remover linha', color: 'rose',
-    body: (n) => `${n}, último passo. Escolha DELETE (atalho: 3), encare um objeto e Espaço. Roda DELETE FROM game_objects WHERE id=X. Apaga PERMANENTE — não tem lixeira. Sempre confira o WHERE antes, em produção isso já causou demissão de muita gente :)`,
+    num: 5, total: 5, title: '5. DELETE · demolir (DELETE WHERE)', color: 'rose',
+    body: (n) =>
+      `Reta final ${n}! Tecla 3 (ou [DELETE]), encara uma casa, Espaço:\n` +
+      `   DELETE FROM game_objects WHERE id = X;\n` +
+      `A casa SOME do banco — apagado é apagado, sem lixeira. Em produção ` +
+      `isso é IRREVERSÍVEL: sempre confira o WHERE 2x antes. ` +
+      `DELETE sem WHERE limparia a tabela inteira.`,
   },
   done: {
     num: 5, total: 5, title: '🎉 Mestre do CRUD', color: 'violet',
-    body: (n) => `Parabéns, ${n}! Você dominou as 4 operações que TODO sistema com banco usa: CREATE, READ, UPDATE, DELETE. Olha o painel CRUD Live ao lado — todo SQL que rodou está lá. Agora é só explorar à vontade!`,
+    body: (n) =>
+      `Parabéns ${n}! Você rodou as 4 operações que TODO sistema com banco usa: ` +
+      `CREATE, READ, UPDATE, DELETE — cada uma virou SQL real numa Aurora MySQL na AWS. ` +
+      `Já já abre um quiz rapidinho pra fixar; depois é sandbox livre.`,
   },
 };
 
@@ -167,6 +199,105 @@ function PlayerPreview({ custom }: { custom: PlayerCustom }) {
         <rect x="-3" y="-15" width="3" height="1" fill="white" opacity="0.6" />
       </>}
     </svg>
+  );
+}
+
+// EDUCATIONAL: modal exibido após INSPECT (GET /api/objetos/:id).
+// Mostra os dados crus da linha lida, com a SQL que rodou e a tradução em PT-BR.
+function InspectModal({ data, onClose }: { data: Objeto; onClose: () => void }) {
+  const lvl = clampLevel(data.level);
+  const lm = LEVEL_META[lvl];
+  const tipoMeta = TIPO_META[data.tipo];
+  const TipoIcon = tipoMeta.icon;
+  const sql = `SELECT id, tipo, status, pos_x, pos_y, level\nFROM game_objects\nWHERE id = ${data.id};`;
+
+  return (
+    <ModalShell>
+      <div className="flex items-center gap-3 mb-3">
+        <Search className="w-5 h-5 text-cyan-300" />
+        <div>
+          <h2 className="font-mono text-lg text-cyan-300">INSPECT · casa #{data.id}</h2>
+          <p className="text-[11px] text-slate-400 font-mono">SELECT WHERE id = {data.id} · 1 linha lida</p>
+        </div>
+        <button
+          onClick={onClose}
+          className="ml-auto text-slate-500 hover:text-slate-200 p-1 rounded"
+          aria-label="fechar"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Header com sprite + status */}
+      <div className="rounded-xl border border-white/5 bg-gradient-to-br from-cyan-500/5 to-violet-500/5 p-4 mb-4 flex items-center gap-3">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={lm.sprite}
+          alt={`Casa nível ${lvl}`}
+          width={64}
+          height={64}
+          className="rounded-lg shadow-[0_0_30px_rgba(34,211,238,0.2)]"
+          style={{ imageRendering: 'pixelated' }}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">{lm.emoji}</span>
+            <span className="font-mono text-sm text-cyan-200">casa nível {lvl}</span>
+            <span className="text-[10px] font-mono text-slate-500">({lm.label})</span>
+          </div>
+          <div className="flex items-center gap-1.5 mt-1.5 text-[11px] font-mono text-slate-400">
+            <TipoIcon className="w-3.5 h-3.5" />
+            <span>tipo: <span className="text-slate-200">{data.tipo}</span></span>
+            <span className="ml-2">·</span>
+            <span>status: <span className="text-slate-200">{data.status}</span></span>
+          </div>
+        </div>
+      </div>
+
+      {/* Tabela "linha do banco" */}
+      <div className="rounded-lg border border-white/5 bg-white/[0.02] overflow-hidden mb-4">
+        <div className="px-3 py-1.5 bg-white/[0.03] border-b border-white/5 text-[10px] font-mono text-slate-400">
+          <code className="text-violet-200 font-bold">cruddungeon</code>
+          <span className="text-slate-500">.</span>
+          <code className="text-cyan-300 font-bold">game_objects</code>
+          <span className="ml-2 text-slate-500">· 1 linha</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5 px-3 py-2 text-[11px] font-mono">
+          <div className="flex items-center gap-1.5"><Hash className="w-3 h-3 text-slate-500" /><span className="text-slate-500">id</span></div>
+          <div className="text-slate-100 col-span-1 sm:col-span-2">{data.id}</div>
+          <div className="text-slate-500">tipo</div>
+          <div className="text-slate-100 col-span-1 sm:col-span-2">{data.tipo}</div>
+          <div className="text-slate-500">status</div>
+          <div className="text-slate-100 col-span-1 sm:col-span-2">{data.status}</div>
+          <div className="text-slate-500">level</div>
+          <div className="text-slate-100 col-span-1 sm:col-span-2">{lvl} <span className="text-slate-500">/ 3</span></div>
+          <div className="flex items-center gap-1.5"><MapPin className="w-3 h-3 text-slate-500" /><span className="text-slate-500">pos</span></div>
+          <div className="text-slate-100 col-span-1 sm:col-span-2">({data.pos_x}, {data.pos_y})</div>
+        </div>
+      </div>
+
+      {/* SQL que rodou */}
+      <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 overflow-hidden mb-4">
+        <div className="px-3 py-1.5 bg-cyan-400/10 border-b border-cyan-400/20 text-[10px] font-mono text-cyan-200 uppercase tracking-wider">
+          SQL executado
+        </div>
+        <pre className="px-3 py-2 text-[11px] font-mono text-slate-200 leading-relaxed whitespace-pre-wrap">
+          {highlightSql(sql)}
+        </pre>
+      </div>
+
+      <p className="text-[11px] text-slate-400 leading-relaxed mb-4">
+        <strong className="text-cyan-200">READ-detalhe</strong> é o GET mais comum em apps reais — buscar UMA linha
+        pelo id, sem trazer a tabela inteira. É o que acontece quando você clica num produto e a página carrega só ele.
+      </p>
+
+      <button
+        onClick={onClose}
+        className="w-full bg-cyan-500/20 border border-cyan-400/40 text-cyan-200 hover:bg-cyan-500/30 transition-colors rounded-lg py-2.5 font-mono text-sm flex items-center justify-center gap-2"
+      >
+        fechar
+      </button>
+    </ModalShell>
   );
 }
 
@@ -334,62 +465,116 @@ function TutorialBanner({
 }) {
   const info = TUTORIAL_STEPS[step];
   const cm = COLOR_MAP[info.color];
-  // EDUCATIONAL: colapsável em mobile pra não roubar espaço do canvas.
   const [collapsed, setCollapsed] = useState(false);
+  const stepIdx = info.num - 1;
+  const total = info.total;
+  const isDone = step === 'done';
+  // EDUCATIONAL: progresso real — dones contam como total.
+  const progress = isDone ? 1 : stepIdx / total;
+
   return (
     <motion.div
       key={step}
       layout
-      initial={{ y: -10, opacity: 0 }}
-      animate={{ y: 0, opacity: 1 }}
-      exit={{ y: -10, opacity: 0 }}
-      transition={{ type: 'spring', stiffness: 350, damping: 26 }}
-      className={`glass rounded-lg border ${cm.ring} ${cm.bg} ${collapsed ? 'px-2 py-1' : 'px-3 py-2'}`}
+      initial={{ y: -16, opacity: 0, scale: 0.96 }}
+      animate={{ y: 0, opacity: 1, scale: 1 }}
+      exit={{ y: -16, opacity: 0, scale: 0.98 }}
+      transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+      className={`max-w-2xl mx-auto rounded-xl border ${cm.ring} bg-slate-950/85 backdrop-blur-md shadow-[0_16px_50px_rgba(0,0,0,0.5)] overflow-hidden`}
     >
-      <div className="flex items-start gap-2">
-        <button
-          onClick={() => setCollapsed((v) => !v)}
-          className={`shrink-0 ${collapsed ? 'w-6 h-6' : 'w-8 h-8'} rounded-md bg-white/5 flex items-center justify-center font-mono ${cm.fg} text-[11px] font-bold transition-all hover:bg-white/10`}
-          title={collapsed ? 'expandir' : 'minimizar'}
-        >
-          {step === 'done' ? '✓' : `${info.num}/${info.total}`}
-        </button>
+      {/* progress bar — preenche conforme avança nos steps */}
+      <div className="h-0.5 bg-white/5 relative">
+        <motion.div
+          className={`h-full ${cm.bg.replace('/10', '/60')}`}
+          initial={false}
+          animate={{ width: `${progress * 100}%` }}
+          transition={{ type: 'spring', stiffness: 200, damping: 30 }}
+        />
+      </div>
+
+      <div className="px-3 py-2 flex items-start gap-3">
+        {/* "número grande" + dots */}
+        <div className="flex flex-col items-center gap-1.5 shrink-0">
+          <div
+            className={`w-9 h-9 rounded-lg ${cm.bg} ${cm.ring} border ${cm.fg} flex items-center justify-center font-mono font-bold text-base shadow-[0_0_18px_rgba(34,211,238,0.18)]`}
+          >
+            {isDone ? '✓' : info.num}
+          </div>
+          <div className="flex gap-0.5">
+            {Array.from({ length: total }).map((_, i) => (
+              <span
+                key={i}
+                className={`w-1 h-1 rounded-full transition-colors ${
+                  isDone || i < stepIdx ? cm.bg.replace('/10', '/80') : i === stepIdx ? cm.fg.replace('text-', 'bg-') : 'bg-white/10'
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <div className={`font-mono text-[10px] ${cm.fg} uppercase tracking-wider truncate`}>
+          <div className="flex items-center gap-2 mb-0.5">
+            <div className={`font-mono text-[10px] ${cm.fg} uppercase tracking-[0.18em] truncate font-bold`}>
               {info.title}
             </div>
-            {collapsed && (
-              <button
-                onClick={() => setCollapsed(false)}
-                className="text-[10px] font-mono text-slate-500 hover:text-slate-200 ml-auto"
-              >
-                ler →
-              </button>
-            )}
+            <span className="text-[9px] font-mono text-slate-500 ml-auto shrink-0">
+              {isDone ? 'concluído' : `${info.num} / ${total}`}
+            </span>
           </div>
           {!collapsed && (
-            <p className="text-[12px] text-slate-200 leading-snug mt-0.5">
-              {info.body(name)}
-            </p>
+            // EDUCATIONAL: split em linhas — linhas que começam com 3+ espaços viram code block.
+            // Isso permite copy didático com SQL embutido sem MD parser.
+            <div className="text-[12px] text-slate-200 leading-relaxed space-y-1">
+              {info.body(name).split('\n').map((line, i) => {
+                const isCode = /^\s{3,}/.test(line);
+                return isCode ? (
+                  <code
+                    key={i}
+                    className="block font-mono text-[11px] text-cyan-200 bg-cyan-400/10 border-l-2 border-cyan-400/40 pl-2 py-0.5 rounded-r"
+                  >
+                    {line.replace(/^\s{3,}/, '')}
+                  </code>
+                ) : (
+                  <p key={i}>{line}</p>
+                );
+              })}
+            </div>
+          )}
+          {collapsed && (
+            <button
+              onClick={() => setCollapsed(false)}
+              className="text-[10px] font-mono text-slate-500 hover:text-slate-200"
+            >
+              ler dica →
+            </button>
           )}
         </div>
-        {!collapsed && (step === 'done' ? (
+
+        <div className="flex flex-col gap-1 shrink-0">
           <button
-            onClick={onClose}
-            className={`text-[10px] font-mono ${cm.fg} px-2 py-1 self-center hover:bg-white/5 rounded shrink-0`}
+            onClick={() => setCollapsed((v) => !v)}
+            className="text-[9px] font-mono text-slate-500 hover:text-slate-200 px-1.5 py-0.5 rounded hover:bg-white/5"
+            title={collapsed ? 'expandir' : 'minimizar'}
           >
-            fechar
+            {collapsed ? '▼' : '▲'}
           </button>
-        ) : (
-          <button
-            onClick={onSkip}
-            className="text-[10px] font-mono text-slate-500 hover:text-slate-300 px-2 py-1 self-center shrink-0"
-            title="Pular tutorial"
-          >
-            pular
-          </button>
-        ))}
+          {isDone ? (
+            <button
+              onClick={onClose}
+              className={`text-[10px] font-mono ${cm.fg} px-2 py-1 hover:bg-white/5 rounded`}
+            >
+              fechar
+            </button>
+          ) : (
+            <button
+              onClick={onSkip}
+              className="text-[9px] font-mono text-slate-500 hover:text-slate-300 px-2 py-0.5"
+              title="Pular tutorial"
+            >
+              pular
+            </button>
+          )}
+        </div>
       </div>
     </motion.div>
   );
@@ -408,34 +593,53 @@ interface SqlPreviewBarProps {
 }
 
 function SqlPreviewBar({ tool, tipo, facing, target }: SqlPreviewBarProps) {
-  const isRead = facing.x === 0 && facing.y === 0;
-  const meta = isRead
-    ? { verb: 'GET' as const, color: 'cyan' as const, label: 'READ' }
-    : { verb: TOOL_META[tool].verb, color: TOOL_META[tool].color, label: TOOL_META[tool].label };
+  // EDUCATIONAL: holograma "in-world" sobre o canvas — estilo do mockup tactical.
+  // Mostra a próxima ação E o SQL que vai rodar, antes de você apertar Espaço.
+  const meta = {
+    verb: TOOL_META[tool].verb,
+    color: TOOL_META[tool].color,
+    label: TOOL_META[tool].label,
+    shortLetter: TOOL_META[tool].label.charAt(0),
+  };
   const cm = COLOR_MAP[meta.color];
   const sql = buildSqlPreview(tool, tipo, facing.x, facing.y, target);
+  const nodeRef = target?.id ? `Node ${target.id}` : `Tile (${facing.x}, ${facing.y})`;
 
   return (
     <motion.div
       layout
-      className="glass rounded-lg px-2 py-1.5 font-mono text-[11px]"
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+      className={`relative font-mono text-[11px] rounded-lg border ${cm.ring} bg-slate-950/70 backdrop-blur-md shadow-[0_0_30px_rgba(34,211,238,0.15)] overflow-hidden`}
     >
-      <div className="flex flex-wrap items-center gap-1.5 mb-1 text-[10px]">
-        <span className={`px-1.5 py-0.5 rounded border ${cm.ring} ${cm.bg} ${cm.fg} font-bold`}>
-          {meta.verb}
-        </span>
-        <span className="text-slate-500">próxima:</span>
-        <span className={cm.fg}>{meta.label}</span>
-        <code className="text-slate-400">({facing.x}, {facing.y})</code>
-        <span className="text-slate-500 ml-auto hidden sm:inline">
-          <kbd className="px-1 border border-white/10 rounded bg-white/5">Espaço</kbd>
-        </span>
+      {/* faixa lateral colorida — identidade visual da operação */}
+      <div className={`absolute top-0 bottom-0 left-0 w-1 ${cm.bg}`} />
+
+      <div className="px-3 py-2 pl-4">
+        {/* linha 1: ACTION VISUALIZATION */}
+        <div className={`text-[9px] uppercase tracking-[0.18em] ${cm.fg} opacity-70 mb-1`}>
+          &gt; ACTION VISUALIZATION REQUEST
+        </div>
+        {/* linha 2: ACTION + node + tile */}
+        <div className={`flex flex-wrap items-center gap-1.5 mb-1`}>
+          <span className={`text-[10px] ${cm.fg}`}>&gt; ACTION:</span>
+          <span className={`px-1 rounded border ${cm.ring} ${cm.bg} ${cm.fg} font-bold text-[10px]`}>
+            [{meta.shortLetter}] {meta.label}
+          </span>
+          <code className="text-slate-400 text-[10px]">({nodeRef}, x:{facing.x}, y:{facing.y})</code>
+          <span className="text-slate-500 ml-auto hidden sm:inline text-[10px]">
+            <kbd className="px-1 border border-white/10 rounded bg-white/5">Espaço</kbd>
+          </span>
+        </div>
+        {/* linha 3+: SQL real */}
+        <div className={`text-[9px] uppercase tracking-[0.18em] ${cm.fg} opacity-70 mt-1.5`}>
+          &gt; SQL COMMAND GENERATION
+        </div>
+        <pre className="hidden sm:block whitespace-pre-wrap break-words text-slate-200 leading-tight mt-0.5">
+          {highlightSql(sql)}
+        </pre>
       </div>
-      {/* EDUCATIONAL: SQL detalhado só em sm+ pra mobile não estourar altura.
-          O painel CRUD Live (à direita / em outro tab) já mostra o SQL real após executar. */}
-      <pre className="hidden sm:block whitespace-pre-wrap break-words text-slate-200 leading-tight">
-        {highlightSql(sql)}
-      </pre>
     </motion.div>
   );
 }
@@ -610,7 +814,7 @@ export default function GameEngine() {
     create?: (x: number, y: number) => void;
     update?: (o: Objeto) => void;
     del?: (o: Objeto) => void;
-    read?: () => void;
+    inspect?: (o: Objeto) => void;
   }>({});
 
   // EDUCATIONAL: store é JS sem types — anotamos o param e fazemos cast no retorno.
@@ -621,9 +825,13 @@ export default function GameEngine() {
   const setUserName = useGameStore((s: any) => s.setUserName as (n: string) => void);
   const setTutorialStep = useGameStore((s: any) => s.setTutorialStep as (st: TutStep) => void);
   const setPlayerCustom = useGameStore((s: any) => s.setPlayerCustom as (c: PlayerCustom) => void);
+  // EDUCATIONAL: tool/tipo agora vêm do store (header também os controla).
+  const tipo = useGameStore((s: any) => s.tipo as Tipo);
+  const tool = useGameStore((s: any) => s.tool as Tool);
+  const setTipo = useGameStore((s: any) => s.setTipo as (t: Tipo) => void);
+  const setTool = useGameStore((s: any) => s.setTool as (t: Tool) => void);
+  const setFps = useGameStore((s: any) => s.setFps as (n: number) => void);
 
-  const [tipo, setTipo] = useState<Tipo>('servidor');
-  const [tool, setTool] = useState<Tool>('build');
   const [ready, setReady] = useState(false);
   const [facing, setFacing] = useState<FacingTile>({ x: 5, y: 9 });
 
@@ -632,8 +840,14 @@ export default function GameEngine() {
   // tipos lá — usamos um shim local com a tipagem certa do payload.
   type Mutate<P> = (p: P, opts?: { onSuccess?: (d: unknown) => void; onError?: (e: { status?: number; message?: string }) => void }) => void;
   const createMut = useCreateObjeto() as unknown as { mutate: Mutate<{ tipo: Tipo; pos_x: number; pos_y: number }> };
-  const updateMut = useUpdateObjeto() as unknown as { mutate: Mutate<{ id: number | string; status: Status }> };
+  const updateMut = useUpdateObjeto() as unknown as { mutate: Mutate<{ id: number | string }> };
   const deleteMut = useDeleteObjeto() as unknown as { mutate: Mutate<number | string> };
+  const inspect = useInspectObjeto() as unknown as (id: number | string) => Promise<Objeto>;
+
+  // EDUCATIONAL: dados do INSPECT (modal). Quando preenchido, mostra a casa lida.
+  const [inspectData, setInspectData] = useState<Objeto | null>(null);
+  // Quiz pós-tutorial (1 vez na vida).
+  const [quizOpen, setQuizOpen] = useState(false);
 
   // Carrega nome + progresso do tutorial + customização do localStorage.
   useEffect(() => {
@@ -678,17 +892,28 @@ export default function GameEngine() {
     setTutorialStep('off');
   }, [setTutorialStep]);
 
-  // EDUCATIONAL: assim que chega em 'done', já marca como concluído no localStorage.
-  // O banner ainda fica visível com o "fechar", mas se você recarregar antes de fechar,
-  // o tutorial NÃO recomeça do zero. Tutorial é uma vez na vida.
+  // EDUCATIONAL: assim que chega em 'done', marca o tutorial como concluído E
+  // dispara o quiz (1× — gated por QUIZ_DONE_KEY). NÃO usamos cleanup com clearTimeout
+  // aqui de propósito: se o usuário fecha o banner em <1.8s, o cleanup mataria o quiz.
+  // Em vez disso, guardamos o id num ref pra evitar agendar duas vezes.
+  const quizScheduledRef = useRef(false);
   useEffect(() => {
     if (tutorialStep === 'done') {
       try { localStorage.setItem(TUTORIAL_DONE_KEY, '1'); } catch { }
+      if (quizScheduledRef.current) return;
+      try {
+        const quizDone = localStorage.getItem(QUIZ_DONE_KEY) === '1';
+        if (!quizDone) {
+          quizScheduledRef.current = true;
+          // pequeno delay para o usuário ler o "Mestre do CRUD" antes do quiz
+          setTimeout(() => setQuizOpen(true), 1500);
+        }
+      } catch { }
     }
   }, [tutorialStep]);
 
   // EDUCATIONAL: atalhos de teclado pra trocar tool sem usar mouse.
-  // 1=BUILD, 2=UPGRADE, 3=DELETE, Tab cicla (Shift+Tab cicla pra trás).
+  // 1=BUILD, 2=UPGRADE, 3=DELETE, 4=INSPECT, Tab cicla (Shift+Tab cicla pra trás).
   // Pula se foco está num input (welcome modal por exemplo).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -697,12 +922,13 @@ export default function GameEngine() {
       if (e.key === '1') { e.preventDefault(); setTool('build'); }
       else if (e.key === '2') { e.preventDefault(); setTool('upgrade'); }
       else if (e.key === '3') { e.preventDefault(); setTool('delete'); }
+      else if (e.key === '4') { e.preventDefault(); setTool('inspect'); }
       else if (e.key === 'Tab') {
         e.preventDefault();
-        const order: Tool[] = ['build', 'upgrade', 'delete'];
+        const order: Tool[] = ['build', 'upgrade', 'delete', 'inspect'];
         const idx = order.indexOf(stateRef.current.tool);
         const dir = e.shiftKey ? -1 : 1;
-        setTool(order[(idx + dir + 3) % 3]);
+        setTool(order[(idx + dir + order.length) % order.length]);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -756,6 +982,8 @@ export default function GameEngine() {
             }
             spawnSqlBubble(kRef.current, `INSERT id=${(created as Objeto).id}`, x, y, [16, 185, 129]);
             spawnFloatingText(kRef.current, `+1 ${tipo}`, x, y - 1, [16, 185, 129], 11);
+            const p = kRef.current?.__player;
+            if (p) spawnPlayerActionSpeech(kRef.current, 'build', p.pos.x, p.pos.y);
             cameraShake(kRef.current, 1.5, 0.18);
             advanceIf('create', 'read');
           },
@@ -767,18 +995,25 @@ export default function GameEngine() {
     cbRef.current.update = (obj) => {
       sfx.update();
       const start = performance.now();
-      const next = STATUS_NEXT[obj.status];
-      const fromStatus = obj.status;
+      const fromLevel = clampLevel(obj.level);
+      const nextLevel = clampLevel(fromLevel + 1);
+      const maxed = fromLevel === 3;
       updateMut.mutate(
-        { id: obj.id as number, status: next },
+        { id: obj.id as number },
         {
           onSuccess: () => {
             notifyApi({ method: 'PUT', status: 200, ms: Math.round(performance.now() - start) });
-            spawnSqlBubble(kRef.current, `SET status='${next}'`, obj.pos_x, obj.pos_y, [251, 191, 36]);
-            // texto flutuante "novo → ativo" + estrelas rodando + shake
-            spawnFloatingText(kRef.current, `${fromStatus} → ${next}`, obj.pos_x, obj.pos_y - 1, [251, 191, 36], 10);
-            spawnLevelUpStars(kRef.current, obj.pos_x * TILE + TILE / 2, obj.pos_y * TILE + TILE / 2, [251, 191, 36]);
-            cameraShake(kRef.current, 1.2, 0.15);
+            if (maxed) {
+              spawnSqlBubble(kRef.current, `nivel max`, obj.pos_x, obj.pos_y, [167, 139, 250]);
+              spawnFloatingText(kRef.current, `máx (3)`, obj.pos_x, obj.pos_y - 1, [167, 139, 250], 10);
+            } else {
+              spawnSqlBubble(kRef.current, `level=${nextLevel}`, obj.pos_x, obj.pos_y, [251, 191, 36]);
+              spawnFloatingText(kRef.current, `nv ${fromLevel} → ${nextLevel}`, obj.pos_x, obj.pos_y - 1, [251, 191, 36], 10);
+              spawnLevelUpStars(kRef.current, obj.pos_x * TILE + TILE / 2, obj.pos_y * TILE + TILE / 2, [251, 191, 36]);
+              const p = kRef.current?.__player;
+              if (p) spawnPlayerActionSpeech(kRef.current, 'update', p.pos.x, p.pos.y);
+              cameraShake(kRef.current, 1.2, 0.15);
+            }
             advanceIf('update', 'delete');
           },
           onError: (e: any) =>
@@ -794,6 +1029,8 @@ export default function GameEngine() {
           notifyApi({ method: 'DELETE', status: 200, ms: Math.round(performance.now() - start) });
           spawnSqlBubble(kRef.current, `DELETE id=${obj.id}`, obj.pos_x, obj.pos_y, [244, 63, 94]);
           spawnFloatingText(kRef.current, `-1`, obj.pos_x, obj.pos_y - 1, [244, 63, 94], 12);
+          const p = kRef.current?.__player;
+          if (p) spawnPlayerActionSpeech(kRef.current, 'delete', p.pos.x, p.pos.y);
           cameraShake(kRef.current, 3, 0.25);
           advanceIf('delete', 'done');
         },
@@ -801,12 +1038,25 @@ export default function GameEngine() {
           notifyApi({ method: 'DELETE', status: e.status || 500, ms: Math.round(performance.now() - start) }),
       });
     };
-    cbRef.current.read = () => {
+    cbRef.current.inspect = (obj) => {
+      // EDUCATIONAL: GET /api/objetos/:id — lê SÓ esta linha. Mostra modal didático.
       sfx.read();
-      notifyApi({ method: 'GET', status: 200, ms: 0 });
-      spawnSqlBubble(kRef.current, `SELECT *`, 0, 0, [34, 211, 238]);
-      spawnFloatingText(kRef.current, `SELECT *`, 0, -1, [34, 211, 238], 10);
-      advanceIf('read', 'update');
+      const start = performance.now();
+      // efeito visual no canvas: scan de ondas + texto
+      spawnReadWaves(kRef.current, obj.pos_x * TILE + TILE / 2, obj.pos_y * TILE + TILE / 2);
+      spawnSqlBubble(kRef.current, `SELECT id=${obj.id}`, obj.pos_x, obj.pos_y, [34, 211, 238]);
+      spawnFloatingText(kRef.current, `READ #${obj.id}`, obj.pos_x, obj.pos_y - 1, [34, 211, 238], 10);
+      const p = kRef.current?.__player;
+      if (p) spawnPlayerActionSpeech(kRef.current, 'inspect', p.pos.x, p.pos.y);
+      inspect(obj.id)
+        .then((data) => {
+          notifyApi({ method: 'GET', status: 200, ms: Math.round(performance.now() - start) });
+          setInspectData(data);
+          advanceIf('read', 'update');
+        })
+        .catch((e: any) => {
+          notifyApi({ method: 'GET', status: e?.status || 500, ms: Math.round(performance.now() - start) });
+        });
     };
   });
 
@@ -837,65 +1087,29 @@ export default function GameEngine() {
       kRef.current = k;
       const K_ = k as K;
 
+      // EDUCATIONAL: pré-carrega os 3 sprites de casa (níveis 1/2/3).
+      // loadSprite é assíncrono — esperamos antes de spawnar qualquer obj-node,
+      // senão drawSprite('casa1') falha em silêncio até o asset chegar.
+      // Note: 'casa%20v3.png' tem espaço no nome do arquivo no /public.
+      try {
+        await Promise.all([
+          K_.loadSprite('casa1', '/casa.png'),
+          K_.loadSprite('casa2', '/casav2.png'),
+          K_.loadSprite('casa3', '/casa%20v3.png'),
+        ]);
+      } catch (err) {
+        // sprites são best-effort — se falhar, drawHouseByLevel cai num fallback procedural.
+        console.warn('[CRUD Dungeon] sprite load falhou, usando fallback procedural', err);
+      }
+      if (cancelled) return;
+
       // Tiles do data center
       drawDataCenterFloor(K_);
 
-      // Read panel "?" no canto (0,0) — agora com pulsing + bounce + halo orbital.
-      const readBg = K_.add([
-        K_.rect(TILE - 6, TILE - 6, { radius: 6 }),
-        K_.pos(3, 3),
-        K_.color(34, 211, 238),
-        K_.opacity(0.18),
-        K_.outline(3, K_.rgb(34, 211, 238)),
-        K_.z(0),
-        { phaseT: 0 },
-      ]);
-      readBg.onUpdate(() => {
-        readBg.phaseT += K_.dt() * 2;
-        readBg.opacity = 0.15 + 0.18 * Math.abs(Math.sin(readBg.phaseT));
-      });
-      K_.add([
-        K_.rect(TILE - 14, TILE - 14, { radius: 4 }),
-        K_.pos(7, 7),
-        K_.color(8, 14, 28),
-        K_.outline(1, K_.rgb(34, 211, 238)),
-        K_.z(1),
-      ]);
-      // "?" com bounce vertical
-      const qmark = K_.add([
-        K_.text('?', { size: 22 }),
-        K_.pos(TILE / 2 - 6, TILE / 2 - 13),
-        K_.color(34, 211, 238),
-        K_.z(2),
-        { phaseT: 0, baseY: TILE / 2 - 13 },
-      ]);
-      qmark.onUpdate(() => {
-        qmark.phaseT += K_.dt() * 3;
-        qmark.pos.y = qmark.baseY + Math.sin(qmark.phaseT) * 2;
-      });
-      // halo orbital ao redor (3 dots circulando)
-      for (let i = 0; i < 3; i++) {
-        const dot = K_.add([
-          K_.circle(1.5),
-          K_.pos(TILE / 2, TILE / 2),
-          K_.color(34, 211, 238),
-          K_.opacity(0.7),
-          K_.z(3),
-          { phaseT: i * 2.1 },
-        ]);
-        dot.onUpdate(() => {
-          dot.phaseT += K_.dt() * 1.5;
-          dot.pos.x = TILE / 2 + Math.cos(dot.phaseT) * (TILE / 2 - 4);
-          dot.pos.y = TILE / 2 + Math.sin(dot.phaseT) * (TILE / 2 - 4);
-        });
-      }
-      K_.add([
-        K_.text('READ', { size: 6 }),
-        K_.pos(8, TILE - 12),
-        K_.color(34, 211, 238),
-        K_.opacity(0.6),
-        K_.z(2),
-      ]);
+      // EDUCATIONAL: NPC ambiente ("data clerk") + signs interativas dão vida ao mapa,
+      // sem competir com o gameplay. Tudo procedural, sem assets externos.
+      spawnNpcs(K_);
+      spawnSigns(K_);
 
       // Partículas ambiente — pontos lentos como pacotes de dados
       spawnAmbientParticles(K_);
@@ -921,6 +1135,8 @@ export default function GameEngine() {
           action: 'idle' as 'idle' | 'build' | 'update' | 'delete' | 'happy',
           actionT: 0,
           happyT: 0,
+          idleT: 0,
+          nextIdleAt: 12 + Math.random() * 8,
           update() {
             this.pos.x = K_.lerp(this.pos.x, this.targetPos.x, 0.22);
             this.pos.y = K_.lerp(this.pos.y, this.targetPos.y, 0.22);
@@ -943,6 +1159,17 @@ export default function GameEngine() {
             if (this.frameTime > 0.13) {
               this.frameTime = 0;
               this.frame = this.moving ? (this.frame + 1) % 4 : 0;
+            }
+            // Idle quotes — só quando ocioso (não andando, não em ação, não happy)
+            if (!this.moving && this.action === 'idle') {
+              this.idleT += K_.dt();
+              if (this.idleT > this.nextIdleAt) {
+                spawnPlayerIdleSpeech(K_, this.pos.x, this.pos.y);
+                this.idleT = 0;
+                this.nextIdleAt = 14 + Math.random() * 10;
+              }
+            } else {
+              this.idleT = 0;
             }
             this.moving = false;
             const dx = this.dir === 'right' ? 1 : this.dir === 'left' ? -1 : 0;
@@ -970,7 +1197,6 @@ export default function GameEngine() {
           },
           draw() {
             const f = stateRef.current.facing;
-            if (f.x === 0 && f.y === 0) return; // já desenhado como "?" panel
             const pulse = 0.5 + 0.5 * Math.sin(this.t);
             const expand = pulse * 4;
             // outer pulsing rect
@@ -1039,6 +1265,7 @@ export default function GameEngine() {
             objNodes.set(replacement.id, node);
             node.objStatus = replacement.status;
             node.objTipo = replacement.tipo;
+            node.objLevel = clampLevel(replacement.level);
           } else {
             spawnDeleteParticles(K_, node.pos.x, node.pos.y);
             node.destroy();
@@ -1049,13 +1276,18 @@ export default function GameEngine() {
         // Pass 2 — adiciona ou atualiza
         for (const o of objs) {
           const existing = objNodes.get(o.id);
+          const newLvl = clampLevel(o.level);
           if (!existing) {
             const node = makeObjectNode(K_, o);
             objNodes.set(o.id, node);
-          } else if (existing.objStatus !== o.status || existing.objTipo !== o.tipo) {
+          } else if (existing.objStatus !== o.status || existing.objTipo !== o.tipo || existing.objLevel !== newLvl) {
+            const leveledUp = existing.objLevel != null && newLvl > existing.objLevel;
             existing.objStatus = o.status;
             existing.objTipo = o.tipo;
-            K_.tween(1.18, 1, 0.28, (v: number) => (existing.scale = K_.vec2(v, v)), K_.easings.easeOutQuad);
+            existing.objLevel = newLvl;
+            // pop visual maior quando sobe de nível (evolui sprite)
+            const overshoot = leveledUp ? 1.35 : 1.18;
+            K_.tween(overshoot, 1, 0.32, (v: number) => (existing.scale = K_.vec2(v, v)), K_.easings.easeOutQuad);
           }
         }
       };
@@ -1119,11 +1351,6 @@ export default function GameEngine() {
 
       const interact = () => {
         const f = stateRef.current.facing;
-        if (f.x === 0 && f.y === 0) {
-          cbRef.current.read?.();
-          spawnReadWaves(K_, TILE / 2, TILE / 2);
-          return;
-        }
         const obj = tileOcupado(f.x, f.y);
         const t = stateRef.current.tool;
         if (!obj) {
@@ -1135,7 +1362,11 @@ export default function GameEngine() {
           }
           return;
         }
-        if (t === 'upgrade') {
+        if (t === 'inspect') {
+          // EDUCATIONAL: READ-detalhe (SELECT WHERE id=X). Modal mostra a linha.
+          flashTile(K_, f.x, f.y, [34, 211, 238]);
+          cbRef.current.inspect?.(obj as Objeto);
+        } else if (t === 'upgrade') {
           flashTile(K_, f.x, f.y, [251, 191, 36]);
           spawnUpdateRing(K_, f.x * TILE + TILE / 2, f.y * TILE + TILE / 2);
           setPlayerAction('update');
@@ -1185,6 +1416,19 @@ export default function GameEngine() {
       kRef.current.__interact = interact;
       kRef.current.__cleanup = unsub;
 
+      // EDUCATIONAL: publica FPS pro store a cada 500ms — header lê pra mostrar.
+      const fpsTimer = setInterval(() => {
+        try {
+          const fps = K_.debug?.fps?.() ?? Math.round(1 / Math.max(K_.dt(), 1 / 240));
+          setFps(Math.round(fps));
+        } catch { /* fps é cosmético, não crashar */ }
+      }, 500);
+      const prevCleanup = kRef.current.__cleanup;
+      kRef.current.__cleanup = () => {
+        clearInterval(fpsTimer);
+        try { prevCleanup?.(); } catch { }
+      };
+
       setReady(true);
     })();
 
@@ -1204,10 +1448,6 @@ export default function GameEngine() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 w-full p-2 sm:p-3 gap-2">
-      <Toolbar tipo={tipo} setTipo={setTipo} tool={tool} setTool={setTool} />
-
-      <SqlPreviewBar tool={tool} tipo={tipo} facing={facing} target={target} />
-
       <div className="relative flex-1 min-h-0 w-full flex items-center justify-center">
         <div
           className="relative w-full h-full flex items-center justify-center"
@@ -1224,8 +1464,7 @@ export default function GameEngine() {
             className="pointer-events-none absolute inset-0 rounded-xl"
             style={{ boxShadow: 'inset 0 0 80px rgba(0,0,0,0.55)' }}
           />
-          {/* EDUCATIONAL: tutorial banner agora flutua no topo do canvas
-              em vez de roubar espaço vertical do layout. */}
+          {/* EDUCATIONAL: tutorial banner — topo do canvas, não rouba espaço do layout. */}
           <AnimatePresence mode="wait">
             {userName && tutorialStep !== 'name' && tutorialStep !== 'intro' && tutorialStep !== 'off' && (
               <div key="tut" className="absolute top-2 left-2 right-2 z-10 pointer-events-auto">
@@ -1239,6 +1478,13 @@ export default function GameEngine() {
               </div>
             )}
           </AnimatePresence>
+          {/* EDUCATIONAL: holo de preview SQL — flutua na parte inferior do canvas,
+              acima do hint, abaixo do tutorial. Dá vibe "tactical visualization". */}
+          {ready && (
+            <div className="absolute bottom-10 left-2 right-2 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:max-w-md z-10 pointer-events-none">
+              <SqlPreviewBar tool={tool} tipo={tipo} facing={facing} target={target} />
+            </div>
+          )}
           {!ready && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-xl bg-slate-900/80">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1271,7 +1517,16 @@ export default function GameEngine() {
         {tutorialStep === 'intro' && userName && (
           <IntroStep key="intro" name={userName} onClose={startTutorial} />
         )}
+        {inspectData && (
+          <InspectModal key="inspect" data={inspectData} onClose={() => setInspectData(null)} />
+        )}
       </AnimatePresence>
+
+      <QuizModal
+        open={quizOpen}
+        name={userName}
+        onClose={() => setQuizOpen(false)}
+      />
     </div>
   );
 }
@@ -1280,39 +1535,39 @@ export default function GameEngine() {
 // Drawing helpers — tema "Data Center"
 // ============================================================================
 function drawDataCenterFloor(k: K) {
-  // EDUCATIONAL: piso com biomas (zonas de cor) + decorações fixas (lâmpadas
-  // pulsantes, painéis, plantas) pra dar vida ao mapa. PRNG seeded pra ficar
-  // estável entre frames mas variado o suficiente.
+  // EDUCATIONAL: floor coeso "data center / dungeon". Cores fixas, sem biomas aleatórios.
+  // Estrutura:
+  //   - base escura uniforme com checkerboard sutil
+  //   - 2 paths luminosos (vertical + horizontal) cruzando no spawn (5,9)
+  //   - bordas com "tijolos" pronunciados
+  //   - decorações pontuais (não em paths) representam "objetos do data center"
   const rand = (x: number, y: number) => {
     const s = (x * 73856093) ^ (y * 19349663);
     return ((s % 1000) + 1000) % 1000 / 1000;
   };
 
-  // EDUCATIONAL: 4 biomas mais vibrantes — magenta/violet/cyan/emerald.
-  // Cores SATURADAS pra aparecer no fundo escuro. As zonas se sobrepõem.
-  const biomes: { cx: number; cy: number; r: number; rgb: [number, number, number] }[] = [
-    { cx: 5,  cy: 4,  r: 6, rgb: [80, 30, 110] },   // violet/magenta
-    { cx: 16, cy: 4,  r: 5, rgb: [20, 80, 110] },   // cyan profundo
-    { cx: 4,  cy: 11, r: 5, rgb: [110, 60, 30] },   // amber/laranja
-    { cx: 15, cy: 12, r: 6, rgb: [20, 90, 70]  },   // emerald
-  ];
+  // Path coordinates — cruzam no spawn (5,9) pra orientar o jogador.
+  const isHPath = (y: number) => y === 9;       // corredor horizontal
+  const isVPath = (x: number) => x === 5;       // corredor vertical
+  const onPath = (x: number, y: number) => isHPath(y) || isVPath(x);
 
   for (let y = 0; y < ROWS; y++) {
     for (let x = 0; x < COLS; x++) {
-      const variant = (x + y) % 2 === 0 ? 1 : 0;
-      let r = 14 + variant * 4, g = 22 + variant * 4, b = 42 + variant * 5;
-      for (const bi of biomes) {
-        const dx = x - bi.cx, dy = y - bi.cy;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const inf = Math.max(0, 1 - dist / bi.r);
-        r += bi.rgb[0] * inf * 0.55;
-        g += bi.rgb[1] * inf * 0.55;
-        b += bi.rgb[2] * inf * 0.55;
+      const checker = (x + y) % 2 === 0;
+      const isEdge = x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1;
+
+      // Base color — sempre azul-marinho profundo, varia 2 tons via checker.
+      let r = checker ? 16 : 12;
+      let g = checker ? 24 : 20;
+      let b = checker ? 44 : 38;
+
+      // Path destaca levemente em ciano (sutil, não saturado).
+      if (!isEdge && onPath(x, y)) {
+        r = checker ? 22 : 18;
+        g = checker ? 36 : 32;
+        b = checker ? 56 : 50;
       }
-      // clamp
-      r = Math.min(255, Math.round(r));
-      g = Math.min(255, Math.round(g));
-      b = Math.min(255, Math.round(b));
+
       k.add([
         k.rect(TILE, TILE),
         k.pos(x * TILE, y * TILE),
@@ -1320,61 +1575,87 @@ function drawDataCenterFloor(k: K) {
         k.z(-3),
       ]);
 
-      // borda do mapa: tijolos brilhantes
-      if (x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1) {
+      // Borda do mapa: tijolos brilhantes + rebite central
+      if (isEdge) {
         k.add([
           k.rect(TILE, TILE),
           k.pos(x * TILE, y * TILE),
-          k.color(40, 50, 90),
-          k.opacity(0.35),
+          k.color(28, 38, 70),
+          k.opacity(0.6),
           k.z(-2),
         ]);
-        // detalhe de "rebite" no canto
+        // padrão de tijolos: linha horizontal divisora
+        k.add([
+          k.rect(TILE, 1),
+          k.pos(x * TILE, y * TILE + TILE / 2 - 0.5),
+          k.color(50, 70, 120),
+          k.opacity(0.5),
+          k.z(-1),
+        ]);
         k.add([
           k.circle(2),
           k.pos(x * TILE + TILE / 2, y * TILE + TILE / 2),
           k.color(167, 139, 250),
-          k.opacity(0.5),
+          k.opacity(0.7),
           k.z(-1),
         ]);
+        continue;
       }
 
-      // decorações fixas em ~18% dos tiles internos (não tocam o spawn do player
-      // nem o "?" panel em (0,0)). Escolha procedural via PRNG seeded.
+      // Path: linha cyan central + glow leve. Ajuda o player a se orientar.
+      if (onPath(x, y)) {
+        if (isHPath(y)) {
+          k.add([
+            k.rect(TILE, 2),
+            k.pos(x * TILE, y * TILE + TILE / 2 - 1),
+            k.color(34, 211, 238),
+            k.opacity(0.18),
+            k.z(-2),
+          ]);
+        }
+        if (isVPath(x)) {
+          k.add([
+            k.rect(2, TILE),
+            k.pos(x * TILE + TILE / 2 - 1, y * TILE),
+            k.color(34, 211, 238),
+            k.opacity(0.18),
+            k.z(-2),
+          ]);
+        }
+        // No cruzamento (spawn), círculo decorativo "respawn pad"
+        if (isHPath(y) && isVPath(x)) {
+          k.add([
+            k.circle(TILE / 2 - 6),
+            k.pos(x * TILE + TILE / 2, y * TILE + TILE / 2),
+            k.color(34, 211, 238),
+            k.opacity(0.15),
+            k.outline(1, k.rgb(34, 211, 238)),
+            k.z(-2),
+          ]);
+        }
+        continue; // paths não recebem outras decorações
+      }
+
+      // Decorações fixas em ~12% dos tiles internos. Distribuídas longe dos paths.
       if (x > 1 && y > 1 && x < COLS - 2 && y < ROWS - 2) {
         const seed = rand(x, y);
-        if (seed < 0.18 && !(x === 5 && y === 9)) {
+        if (seed < 0.12) {
           const kind = Math.floor(seed * 1000) % 5;
           drawFloorDecoration(k, x * TILE + TILE / 2, y * TILE + TILE / 2, kind, seed);
           continue;
         }
       }
 
-      // micro-traço de circuito (decorativo, em ~30% dos tiles)
+      // Circuito sutil em ~14% dos tiles (não-paths, não-decorados)
       const seed2 = (x * 31 + y * 17) % 100;
-      if (seed2 < 30) {
-        const which = seed2 % 3;
+      if (seed2 < 14) {
+        const which = seed2 % 2;
         if (which === 0) {
           k.add([
             k.rect(TILE - 8, 1),
             k.pos(x * TILE + 4, y * TILE + TILE / 2),
             k.color(34, 211, 238),
-            k.opacity(0.1),
-            k.z(-2),
-          ]);
-        } else if (which === 1) {
-          k.add([
-            k.rect(1, TILE / 2 - 4),
-            k.pos(x * TILE + TILE / 2, y * TILE + 4),
-            k.color(34, 211, 238),
-            k.opacity(0.12),
-            k.z(-2),
-          ]);
-          k.add([
-            k.rect(TILE / 2 - 4, 1),
-            k.pos(x * TILE + TILE / 2, y * TILE + TILE / 2 - 1),
-            k.color(34, 211, 238),
-            k.opacity(0.12),
+            k.opacity(0.08),
             k.z(-2),
           ]);
         } else {
@@ -1382,31 +1663,34 @@ function drawDataCenterFloor(k: K) {
             k.circle(1.5),
             k.pos(x * TILE + TILE / 2, y * TILE + TILE / 2),
             k.color(167, 139, 250),
-            k.opacity(0.3),
+            k.opacity(0.25),
             k.z(-2),
           ]);
         }
       }
     }
   }
-  // grid lines, bem sutis
+  // grid lines: minor sutis (a cada tile) + major mais visíveis (a cada 5 tiles)
+  // EDUCATIONAL: dá um feel de "tactical map" sem poluir.
   k.onDraw(() => {
     for (let x = 0; x <= COLS; x++) {
+      const isMajor = x % 5 === 0;
       k.drawLine({
         p1: k.vec2(x * TILE, 0),
         p2: k.vec2(x * TILE, H),
         color: k.rgb(34, 211, 238),
-        opacity: 0.05,
-        width: 1,
+        opacity: isMajor ? 0.12 : 0.04,
+        width: isMajor ? 1 : 1,
       });
     }
     for (let y = 0; y <= ROWS; y++) {
+      const isMajor = y % 5 === 0;
       k.drawLine({
         p1: k.vec2(0, y * TILE),
         p2: k.vec2(W, y * TILE),
         color: k.rgb(34, 211, 238),
-        opacity: 0.05,
-        width: 1,
+        opacity: isMajor ? 0.12 : 0.04,
+        width: isMajor ? 1 : 1,
       });
     }
   });
@@ -1535,10 +1819,11 @@ function drawFloorDecoration(k: K, cx: number, cy: number, kind: number, seed: n
 
 function spawnAmbientParticles(k: K) {
   // EDUCATIONAL: pontos lentos atravessam o mapa, sugerindo "dados em trânsito".
-  for (let i = 0; i < 18; i++) {
+  // Densidade reduzida (12 + 1.2s loop) — antes era 18 + 0.6s e o mapa parecia uma chuva.
+  for (let i = 0; i < 12; i++) {
     spawnAmbientParticle(k);
   }
-  k.loop(0.6, () => spawnAmbientParticle(k));
+  k.loop(1.2, () => spawnAmbientParticle(k));
 }
 
 function spawnAmbientParticle(k: K) {
@@ -1673,7 +1958,7 @@ function drawDevopsSprite(
   }
 }
 
-// ===== Object node (renderiza ícone segundo o tipo) =====
+// ===== Object node (renderiza casa por nível: casa.png / casav2.png / casa v3.png) =====
 function makeObjectNode(k: K, o: Objeto) {
   // EDUCATIONAL: drop-from-sky entrance. Tag 'obj-node' permite varredura
   // por tile no DELETE — garante que NENHUM fantasma sobreviva.
@@ -1689,6 +1974,7 @@ function makeObjectNode(k: K, o: Objeto) {
     {
       objStatus: o.status,
       objTipo: o.tipo,
+      objLevel: clampLevel(o.level),
       tileX: o.pos_x,
       tileY: o.pos_y,
       objId: o.id,
@@ -1697,7 +1983,7 @@ function makeObjectNode(k: K, o: Objeto) {
         this.pulseT += k.dt() * 2;
       },
       draw() {
-        drawObjectByType(k, this.objTipo, this.objStatus, this.pulseT);
+        drawHouseByLevel(k, this.objLevel, this.objTipo, this.objStatus, this.pulseT);
       },
     },
   ]);
@@ -1815,27 +2101,29 @@ function cameraShake(k: K, magnitude: number, durationS: number) {
   });
 }
 
-// EDUCATIONAL: status forma uma "barra de progresso" — STATUS_LEVEL em constants.ts.
-// Cada UPDATE adiciona detalhes ao ícone (metáfora: livro vazio → estante cheia).
-
-function drawObjectByType(k: K, tipo: Tipo, status: Status, pulseT: number) {
+// EDUCATIONAL: cada UPDATE evolui visualmente a casa: nv1 → nv2 → nv3.
+// Sprites pixel-art em /public (casa.png / casav2.png / casa v3.png).
+// O badge do tipo (servidor/banco/cache/router) fica num círculo no canto.
+function drawHouseByLevel(k: K, level: Level, tipo: Tipo, status: Status, pulseT: number) {
   const t = TIPO_META[tipo].color;
   const s = STATUS_META[status].color;
-  const level = STATUS_LEVEL[status];
-  const blink = status === 'critico' ? 0.5 + 0.5 * Math.sin(pulseT * 4) : 1;
   const isMax = level === 3;
+  const blink = status === 'critico' ? 0.5 + 0.5 * Math.sin(pulseT * 4) : 1;
 
-  // EDUCATIONAL: SIZE_SCALE cresce 1.0 → 1.25 conforme o item evolui.
-  // Faz o objeto VISUALMENTE crescer a cada UPDATE (não só mudar cor).
-  const sizeScale = 1 + level * 0.08;
-  // GLOW pulsante intensifica com level
-  const glowOpacity = 0.05 + level * 0.05;
-  // Faíscas ambiente em level >= 2 (saem do objeto continuamente)
+  // GLOW base — cor do tipo, atrás de tudo, intensifica com level
+  k.drawCircle({
+    pos: k.vec2(0, 0),
+    radius: (TILE - 4) / 2 * (1 + (level - 1) * 0.06),
+    color: k.rgb(...t),
+    opacity: (0.05 + (level - 1) * 0.05) * blink,
+  });
+
+  // Faíscas ambiente em level >= 2 — orbita dando vida.
   if (level >= 2) {
-    const sparkN = level === 3 ? 4 : 2;
+    const sparkN = isMax ? 4 : 2;
     for (let i = 0; i < sparkN; i++) {
       const ang = pulseT * 1.5 + (i * Math.PI * 2) / sparkN;
-      const r = 14 + Math.sin(pulseT * 3 + i) * 3;
+      const r = 16 + Math.sin(pulseT * 3 + i) * 3;
       k.drawCircle({
         pos: k.vec2(Math.cos(ang) * r, Math.sin(ang) * r),
         radius: 1 + level * 0.2,
@@ -1844,172 +2132,75 @@ function drawObjectByType(k: K, tipo: Tipo, status: Status, pulseT: number) {
       });
     }
   }
-  // GLOW base atrás do halo
-  k.drawCircle({
-    pos: k.vec2(0, 0),
-    radius: (TILE - 4) / 2 * sizeScale,
-    color: k.rgb(...t),
-    opacity: glowOpacity * blink,
-  });
 
-  // Halo de status (cresce com level via sizeScale)
-  const haloW = (TILE - 6) * sizeScale;
+  // Halo de status (quadrado arredondado por trás da casa)
+  const haloW = (TILE - 6) * (1 + (level - 1) * 0.04);
   k.drawRect({
     pos: k.vec2(-haloW / 2, -haloW / 2),
     width: haloW, height: haloW,
     color: k.rgb(s[0], s[1], s[2]),
-    opacity: 0.18 * blink + level * 0.04,
+    opacity: 0.18 * blink + (level - 1) * 0.04,
     radius: 6,
   });
-  // Outline status (mais grosso com level)
   k.drawRect({
     pos: k.vec2(-haloW / 2, -haloW / 2),
     width: haloW, height: haloW,
     fill: false,
-    outline: { width: 2 + level * 0.5, color: k.rgb(s[0], s[1], s[2]), opacity: 0.85 * blink },
+    outline: { width: 2 + (level - 1) * 0.5, color: k.rgb(s[0], s[1], s[2]), opacity: 0.85 * blink },
     radius: 6,
   });
-  // Glow extra quando crítico (status máximo)
-  if (isMax) {
+
+  // ===== Sprite da casa =====
+  // O `level` mapeia direto pro sprite ID (casa1/casa2/casa3) carregado no init.
+  // Se o sprite ainda não estiver pronto (load assíncrono), drawSprite só não desenha
+  // — o halo continua visível, sem crash.
+  const spriteId = `casa${level}`;
+  try {
+    k.drawSprite({
+      sprite: spriteId,
+      pos: k.vec2(0, 0),
+      anchor: 'center',
+      width: TILE - 8,
+      height: TILE - 8,
+    });
+  } catch {
+    // fallback: bloquinho simples se sprite ainda não carregou
     k.drawRect({
-      pos: k.vec2(-(TILE - 2) / 2, -(TILE - 2) / 2),
-      width: TILE - 2,
-      height: TILE - 2,
-      fill: false,
-      outline: { width: 1, color: k.rgb(s[0], s[1], s[2]), opacity: 0.4 * blink },
-      radius: 8,
+      pos: k.vec2(-(TILE - 14) / 2, -(TILE - 14) / 2),
+      width: TILE - 14, height: TILE - 14,
+      color: k.rgb(...t),
+      radius: 2,
     });
   }
 
-  if (tipo === 'servidor') {
-    // ===== Server rack: progressivo de 0→3 LEDs =====
+  // ===== Badge do tipo (canto superior direito) =====
+  // Identifica QUE tipo de casa é, sem competir com o sprite principal.
+  const badgeX = (TILE - 14) / 2;
+  const badgeY = -(TILE - 14) / 2;
+  k.drawCircle({
+    pos: k.vec2(badgeX, badgeY),
+    radius: 5,
+    color: k.rgb(...t),
+    outline: { width: 1, color: k.rgb(15, 23, 42) },
+  });
+  // letra do tipo dentro do badge — s/b/c/r
+  const letter = tipo === 'servidor' ? 'S' : tipo === 'banco' ? 'B' : tipo === 'cache' ? 'C' : 'R';
+  k.drawText({
+    text: letter,
+    pos: k.vec2(badgeX - 2, badgeY - 3),
+    size: 7,
+    color: k.rgb(15, 23, 42),
+  });
+
+  // Glow extra no nível máximo — anel pulsante
+  if (isMax) {
     k.drawRect({
-      pos: k.vec2(-7, -10), width: 14, height: 20,
-      color: k.rgb(t[0], t[1], t[2]),
-      opacity: 0.55 + 0.15 * level,
-      radius: 2,
+      pos: k.vec2(-(TILE - 2) / 2, -(TILE - 2) / 2),
+      width: TILE - 2, height: TILE - 2,
+      fill: false,
+      outline: { width: 1, color: k.rgb(167, 139, 250), opacity: 0.4 + 0.2 * Math.sin(pulseT * 1.5) },
+      radius: 8,
     });
-    for (let i = 0; i < level; i++) {
-      k.drawRect({
-        pos: k.vec2(-5, -7 + i * 6), width: 10, height: 1.5,
-        color: k.rgb(255, 255, 255), opacity: 0.7,
-      });
-      k.drawCircle({
-        pos: k.vec2(5, -6 + i * 6), radius: 1,
-        color: k.rgb(34, 197, 94),
-        opacity: 0.6 + 0.4 * Math.sin(pulseT + i),
-      });
-    }
-    if (isMax) {
-      k.drawCircle({
-        pos: k.vec2(0, -12), radius: 1.2,
-        color: k.rgb(34, 197, 94),
-        opacity: 0.7 + 0.3 * Math.sin(pulseT * 2),
-      });
-    }
-  } else if (tipo === 'banco') {
-    // ===== Database: progressivo de 0→3 "registros" (a metáfora dos livros!) =====
-    // cilindro sempre desenhado
-    k.drawEllipse({
-      pos: k.vec2(0, -9), radiusX: 8, radiusY: 3,
-      color: k.rgb(t[0], t[1], t[2]), opacity: 0.95,
-    });
-    k.drawRect({
-      pos: k.vec2(-8, -9), width: 16, height: 18,
-      color: k.rgb(t[0], t[1], t[2]),
-      opacity: 0.45 + 0.15 * level,
-    });
-    k.drawEllipse({
-      pos: k.vec2(0, 9), radiusX: 8, radiusY: 3,
-      color: k.rgb(t[0], t[1], t[2]), opacity: 0.95,
-    });
-    // "registros" empilhados de baixo pra cima — começa vazio, vai enchendo
-    for (let i = 0; i < level; i++) {
-      k.drawEllipse({
-        pos: k.vec2(0, 5 - i * 5),
-        radiusX: 8, radiusY: 2,
-        fill: false,
-        outline: { width: 1, color: k.rgb(255, 255, 255), opacity: 0.6 },
-      });
-    }
-    if (isMax) {
-      // halo extra "estante cheia"
-      k.drawEllipse({
-        pos: k.vec2(0, -9), radiusX: 9.5, radiusY: 4,
-        fill: false,
-        outline: { width: 1, color: k.rgb(t[0], t[1], t[2]), opacity: 0.5 + 0.3 * Math.sin(pulseT * 1.5) },
-      });
-    }
-  } else if (tipo === 'cache') {
-    // ===== Cache (raio): progressivo — bolt + sparks ao redor =====
-    // bolt sempre. opacity cresce com level.
-    k.drawPolygon({
-      pts: [
-        k.vec2(-1, -10), k.vec2(5, -10), k.vec2(1, -2),
-        k.vec2(6, -2), k.vec2(-3, 10), k.vec2(0, 1), k.vec2(-5, 1),
-      ],
-      color: k.rgb(t[0], t[1], t[2]),
-      opacity: 0.55 + 0.15 * level,
-      outline: { width: 1, color: k.rgb(255, 255, 255), opacity: 0.4 + 0.2 * level },
-    });
-    // sparks adicionais ao redor (1 por level extra)
-    const sparkPositions: [number, number][] = [[-9, -8], [9, -8], [-10, 6], [9, 7]];
-    for (let i = 0; i < level; i++) {
-      const [sx, sy] = sparkPositions[i];
-      k.drawCircle({
-        pos: k.vec2(sx, sy), radius: 1.2,
-        color: k.rgb(t[0], t[1], t[2]),
-        opacity: 0.5 + 0.5 * Math.sin(pulseT * 2 + i),
-      });
-    }
-    if (isMax) {
-      k.drawCircle({
-        pos: k.vec2(0, 0), radius: 12, fill: false,
-        outline: { width: 1, color: k.rgb(t[0], t[1], t[2]), opacity: 0.3 + 0.2 * Math.sin(pulseT * 2) },
-      });
-    }
-  } else if (tipo === 'router') {
-    // ===== Router: progressivo — center + 0→4 arms =====
-    const arms: [number, number][] = [[0, -9], [9, 0], [0, 9], [-9, 0]];
-    for (let i = 0; i < level; i++) {
-      const [ax, ay] = arms[i];
-      k.drawLine({
-        p1: k.vec2(0, 0), p2: k.vec2(ax, ay),
-        color: k.rgb(t[0], t[1], t[2]), width: 2, opacity: 0.7,
-      });
-      k.drawCircle({
-        pos: k.vec2(ax, ay), radius: 2.5,
-        color: k.rgb(t[0], t[1], t[2]),
-      });
-    }
-    // 4ª arm extra quando crítico
-    if (isMax) {
-      const [ax, ay] = arms[3];
-      k.drawLine({
-        p1: k.vec2(0, 0), p2: k.vec2(ax, ay),
-        color: k.rgb(t[0], t[1], t[2]), width: 2, opacity: 0.7,
-      });
-      k.drawCircle({
-        pos: k.vec2(ax, ay), radius: 2.5,
-        color: k.rgb(t[0], t[1], t[2]),
-      });
-    }
-    // center sempre
-    k.drawCircle({
-      pos: k.vec2(0, 0), radius: 4,
-      color: k.rgb(t[0], t[1], t[2]),
-      opacity: 0.6 + 0.13 * level,
-    });
-    k.drawCircle({
-      pos: k.vec2(0, 0), radius: 4, fill: false,
-      outline: { width: 1, color: k.rgb(255, 255, 255), opacity: 0.5 },
-    });
-    if (isMax) {
-      k.drawCircle({
-        pos: k.vec2(0, 0), radius: 13, fill: false,
-        outline: { width: 1, color: k.rgb(t[0], t[1], t[2]), opacity: 0.3 + 0.15 * Math.sin(pulseT * 1.5) },
-      });
-    }
   }
 }
 
@@ -2113,4 +2304,191 @@ function spawnSqlBubble(k: K | null, label: string, tileX: number, tileY: number
     k.z(6),
   ]);
   bubble.onUpdate(() => { bubble.opacity = Math.max(0, bubble.opacity - k.dt() * 0.55); });
+}
+
+// ============================================================================
+// NPCs ambiente — dão vida ao mapa sem competir com gameplay.
+// ============================================================================
+const NPC_PRESETS: Array<{
+  tileX: number; tileY: number;
+  shirt: [number, number, number];
+  hat: [number, number, number] | null;
+  quotes: string[];
+}> = [
+  {
+    tileX: 2, tileY: 2,
+    shirt: [167, 139, 250], hat: [251, 191, 36],
+    quotes: ['SELECT *... 🥱', 'CRUD = vida', 'cafézinho?'],
+  },
+  {
+    tileX: COLS - 3, tileY: 2,
+    shirt: [225, 29, 72], hat: [16, 185, 129],
+    quotes: ['cuidado co/ DELETE', 'sempre c/ WHERE', 'já comitou hoje?'],
+  },
+  {
+    tileX: 2, tileY: ROWS - 3,
+    shirt: [4, 120, 87], hat: [34, 211, 238],
+    quotes: ['AWS = nuvem 🇺🇸', 'RDS é DB gerenciado', 'TLS protege a query'],
+  },
+  {
+    tileX: COLS - 3, tileY: ROWS - 3,
+    shirt: [194, 65, 12], hat: null,
+    quotes: ['UPGRADE evolui 🏠', 'level cap = 3', 'INSERT no spawn?'],
+  },
+];
+
+function spawnNpcs(k: K) {
+  for (const npc of NPC_PRESETS) {
+    const cx = npc.tileX * TILE + TILE / 2;
+    const cy = npc.tileY * TILE + TILE / 2;
+    const quoteAt = 10 + Math.random() * 8;
+    k.add([
+      k.pos(cx, cy),
+      k.anchor('center'),
+      k.scale(1.1),
+      k.z(4),
+      'npc',
+      {
+        bobble: Math.random() * Math.PI * 2,
+        quoteT: -3 - Math.random() * 4,
+        nextAt: quoteAt,
+        update() {
+          this.bobble += k.dt() * 3;
+          this.quoteT += k.dt();
+          if (this.quoteT > this.nextAt) {
+            const q = npc.quotes[Math.floor(Math.random() * npc.quotes.length)];
+            spawnTalkBubble(k, q, cx, cy - 20, [220, 230, 245]);
+            this.quoteT = 0;
+            this.nextAt = 12 + Math.random() * 10;
+          }
+        },
+        draw() {
+          drawNpcSprite(k, this.bobble, npc.shirt, npc.hat);
+        },
+      },
+    ]);
+  }
+}
+
+function drawNpcSprite(k: K, bobble: number, shirtRgb: [number, number, number], hatRgb: [number, number, number] | null) {
+  const bob = Math.sin(bobble) * 0.6;
+  // shadow
+  k.drawEllipse({ pos: k.vec2(0, 12), radiusX: 7, radiusY: 2, color: k.rgb(0, 0, 0), opacity: 0.4 });
+  // legs
+  k.drawRect({ pos: k.vec2(-4, 6 + bob), width: 3, height: 6, color: k.rgb(15, 23, 42), radius: 1 });
+  k.drawRect({ pos: k.vec2(1, 6 + bob), width: 3, height: 6, color: k.rgb(15, 23, 42), radius: 1 });
+  // body
+  k.drawRect({ pos: k.vec2(-6, -2 + bob), width: 12, height: 9, color: k.rgb(...shirtRgb), radius: 2 });
+  // head
+  k.drawRect({ pos: k.vec2(-4, -10 + bob), width: 8, height: 7, color: k.rgb(252, 211, 170), radius: 1 });
+  // eyes (sleepy)
+  k.drawRect({ pos: k.vec2(-3, -8 + bob), width: 1.4, height: 0.8, color: k.rgb(15, 23, 42) });
+  k.drawRect({ pos: k.vec2(2, -8 + bob), width: 1.4, height: 0.8, color: k.rgb(15, 23, 42) });
+  // hat
+  if (hatRgb) {
+    k.drawRect({ pos: k.vec2(-5, -13 + bob), width: 10, height: 4, color: k.rgb(...hatRgb), radius: 2 });
+  }
+}
+
+// EDUCATIONAL: bubble estilo "balão de fala". Usado por NPCs e player idle quotes.
+function spawnTalkBubble(k: K, text: string, x: number, y: number, rgb: [number, number, number]) {
+  // bg (atrás do texto, levemente arredondado)
+  const w = Math.max(20, text.length * 4 + 6);
+  k.add([
+    k.rect(w, 10, { radius: 3 }),
+    k.pos(x - w / 2, y - 7),
+    k.color(15, 23, 42),
+    k.opacity(0.85),
+    k.outline(1, k.rgb(...rgb)),
+    k.lifespan(2.4, { fade: 1.2 }),
+    k.z(7),
+  ]);
+  k.add([
+    k.text(text, { size: 6 }),
+    k.pos(x, y - 2),
+    k.anchor('center'),
+    k.color(...rgb),
+    k.opacity(1),
+    k.lifespan(2.4, { fade: 1.2 }),
+    k.z(8),
+  ]);
+}
+
+// ============================================================================
+// Signs — pequenos placas decorativas (estilo "neon sign") nos cantos do mapa.
+// ============================================================================
+const SIGN_PRESETS: Array<{ tileX: number; tileY: number; lines: string[]; rgb: [number, number, number] }> = [
+  { tileX: 1, tileY: 1, lines: ['CRUD', 'BASICS'], rgb: [34, 211, 238] },
+  { tileX: COLS - 2, tileY: 1, lines: ['TIP:', '4=INSPECT'], rgb: [251, 191, 36] },
+  { tileX: 1, tileY: ROWS - 2, lines: ['HOUSES', 'lvl 1→2→3'], rgb: [167, 139, 250] },
+  { tileX: COLS - 2, tileY: ROWS - 2, lines: ['DB', 'AWS RDS'], rgb: [16, 185, 129] },
+];
+
+function spawnSigns(k: K) {
+  for (const s of SIGN_PRESETS) {
+    const cx = s.tileX * TILE + TILE / 2;
+    const cy = s.tileY * TILE + TILE / 2;
+    // poste
+    k.add([
+      k.rect(2, 16),
+      k.pos(cx - 1, cy + 4),
+      k.color(60, 70, 110),
+      k.z(-1),
+    ]);
+    // placa
+    k.add([
+      k.rect(28, 16, { radius: 2 }),
+      k.pos(cx - 14, cy - 14),
+      k.color(15, 23, 42),
+      k.outline(1, k.rgb(...s.rgb)),
+      k.opacity(0.95),
+      k.z(0),
+    ]);
+    // textos
+    s.lines.forEach((line, i) => {
+      k.add([
+        k.text(line, { size: 5 }),
+        k.pos(cx, cy - 10 + i * 6),
+        k.anchor('center'),
+        k.color(...s.rgb),
+        k.opacity(0.95),
+        k.z(1),
+        { phase: Math.random() * 6.28 },
+      ]).onUpdate(function (this: any) {
+        // pisca leve estilo neon
+        this.opacity = 0.75 + 0.25 * Math.abs(Math.sin(k.time() * 1.4 + this.phase));
+      });
+    });
+  }
+}
+
+// ============================================================================
+// Player idle quotes — pop "💭 thought" aleatório a cada 12-20s parado.
+// ============================================================================
+const IDLE_QUOTES = [
+  'mais uma casa?',
+  'CRUD é vida',
+  'atalho 4 = ler',
+  'banco vivo',
+  'AWS responde',
+  'level 3 ftw',
+];
+
+function spawnPlayerIdleSpeech(k: K, x: number, y: number) {
+  const q = IDLE_QUOTES[Math.floor(Math.random() * IDLE_QUOTES.length)];
+  spawnTalkBubble(k, q, x, y - 28, [165, 243, 252]);
+}
+
+// EDUCATIONAL: speech bubble que sai do player ao executar uma ação CRUD.
+// Curta, contextual ("CONSTRUINDO!", "EVOLUINDO!", "DELETANDO!").
+function spawnPlayerActionSpeech(k: K | null, kind: 'build' | 'update' | 'delete' | 'inspect', x: number, y: number) {
+  if (!k) return;
+  const map = {
+    build:   { text: 'BUILDING!', rgb: [110, 231, 183] as [number, number, number] },
+    update:  { text: 'EVOLVING!', rgb: [253, 224, 71]  as [number, number, number] },
+    delete:  { text: 'BOOM!',     rgb: [254, 205, 211] as [number, number, number] },
+    inspect: { text: 'SCANNING…', rgb: [165, 243, 252] as [number, number, number] },
+  };
+  const cfg = map[kind];
+  spawnTalkBubble(k, cfg.text, x, y - 28, cfg.rgb);
 }

@@ -1,10 +1,12 @@
 // components/panels/SqlConsole.jsx
 'use client';
-// EDUCATIONAL: SQL Console reformulado — terminal moderno com cursor piscando,
-// status colorido por keyword e timestamp em estilo monitor de logs.
+// EDUCATIONAL: SQL Console — terminal moderno com cursor piscando, status colorido por
+// keyword, timestamp em estilo monitor de logs E uma linha de TRADUÇÃO PT-BR por query
+// pra quem nunca viu SQL na vida.
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
-import { Terminal, CheckCircle2, XCircle } from 'lucide-react';
+import { Terminal, CheckCircle2, XCircle, Languages } from 'lucide-react';
+import { humanizeSql, SQL_KEYWORD_THEME } from '@/lib/game/sql';
 
 const KEYWORDS = /\b(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|ORDER|BY|ASC|DESC|AND|OR|LIMIT)\b/g;
 
@@ -46,14 +48,6 @@ function firstKeyword(sql) {
   return m ? m[1].toUpperCase() : 'SQL';
 }
 
-const KW_COLOR = {
-  SELECT: 'border-cyan-400/40 bg-cyan-400/10 text-cyan-300',
-  INSERT: 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300',
-  UPDATE: 'border-amber-400/40 bg-amber-400/10 text-amber-300',
-  DELETE: 'border-rose-400/40 bg-rose-400/10 text-rose-300',
-  SQL:    'border-slate-400/40 bg-slate-400/10 text-slate-300',
-};
-
 export default function SqlConsole() {
   const sqlLog = useGameStore((s) => s.sqlLog);
 
@@ -85,7 +79,9 @@ export default function SqlConsole() {
         <AnimatePresence initial={false}>
           {sqlLog.map((entry) => {
             const kw = firstKeyword(entry.sql);
+            const theme = SQL_KEYWORD_THEME[kw] || SQL_KEYWORD_THEME.SQL;
             const ok = entry.status < 400;
+            const human = humanizeSql(entry.sql);
             return (
               <motion.div
                 key={entry.id}
@@ -93,13 +89,14 @@ export default function SqlConsole() {
                 animate={{ opacity: 1, x: 0, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.96 }}
                 transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                className="rounded-lg border border-white/5 bg-white/[0.02] overflow-hidden"
+                className={`rounded-lg border ${theme.ring} bg-white/[0.02] overflow-hidden`}
               >
-                {/* meta row */}
-                <div className="flex items-center gap-2 px-2 py-1 bg-white/[0.03] border-b border-white/5 text-[10px]">
-                  <span className={`px-1.5 py-0.5 rounded border font-bold ${KW_COLOR[kw] || KW_COLOR.SQL}`}>
-                    {kw}
+                {/* meta row — borda lateral colorida indica a operação CRUD */}
+                <div className={`flex items-center gap-2 px-2 py-1 ${theme.bg} border-b border-white/5 text-[10px]`}>
+                  <span className={`px-1.5 py-0.5 rounded border font-bold ${theme.ring} ${theme.fg} bg-slate-950/40`}>
+                    {theme.label}
                   </span>
+                  <code className={`${theme.fg} opacity-60`}>{kw}</code>
                   <span className="text-slate-500">{fmtTime(entry.ts)}</span>
                   <span className="ml-auto flex items-center gap-1.5">
                     {ok
@@ -115,6 +112,13 @@ export default function SqlConsole() {
                 <pre className="px-2 py-1.5 whitespace-pre-wrap break-all text-slate-200 leading-relaxed">
                   {highlight(entry.sql)}
                 </pre>
+                {/* EDUCATIONAL: tradução em PT-BR — ajuda quem nunca viu SQL */}
+                {human && (
+                  <div className="px-2 py-1 border-t border-white/5 bg-white/[0.02] flex items-start gap-1.5 text-[10px] text-slate-400 leading-snug">
+                    <Languages className="w-3 h-3 mt-0.5 shrink-0 text-slate-500" />
+                    <span>{human}</span>
+                  </div>
+                )}
               </motion.div>
             );
           })}

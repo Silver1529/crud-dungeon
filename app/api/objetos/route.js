@@ -28,7 +28,7 @@ export async function GET(req) {
     return jsonWith(requestId, { error: 'rate_limited' }, { status: 429 });
   }
   try {
-    const sql = 'SELECT id, tipo, status, pos_x, pos_y FROM game_objects ORDER BY id ASC';
+    const sql = 'SELECT id, tipo, status, pos_x, pos_y, level FROM game_objects ORDER BY id ASC';
     const rows = await query(sql);
     logger.info('objetos_list', { requestId, count: rows.length });
     return jsonWith(requestId, {
@@ -67,8 +67,9 @@ export async function POST(req) {
   }
 
   const { tipo, pos_x, pos_y } = parsed.data;
-  const sql = 'INSERT INTO game_objects (tipo, status, pos_x, pos_y) VALUES (:tipo, :status, :x, :y)';
-  const params = { tipo, status: 'novo', x: pos_x, y: pos_y };
+  // EDUCATIONAL: toda casa nasce nível 1 (status='novo'). Server é a fonte da verdade.
+  const sql = 'INSERT INTO game_objects (tipo, status, pos_x, pos_y, level) VALUES (:tipo, :status, :x, :y, :level)';
+  const params = { tipo, status: 'novo', x: pos_x, y: pos_y, level: 1 };
 
   try {
     const result = await query(sql, params);
@@ -76,7 +77,7 @@ export async function POST(req) {
     return jsonWith(
       requestId,
       {
-        data: { id: result.insertId, tipo, status: 'novo', pos_x, pos_y },
+        data: { id: result.insertId, tipo, status: 'novo', pos_x, pos_y, level: 1 },
         _debug: { sql: renderSql(sql, params), affected: result.affectedRows },
       },
       { status: 201 }

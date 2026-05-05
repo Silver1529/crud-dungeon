@@ -1,7 +1,7 @@
 // components/panels/DatabaseView.jsx
 'use client';
 // EDUCATIONAL: Database View moderno — header em estilo schema, linhas
-// destacam ao mudar (highlight pulsante), badges coloridos por tipo+status.
+// destacam ao mudar (highlight pulsante), badges coloridos por tipo+status+level.
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
@@ -21,7 +21,16 @@ const STATUS = {
   critico: { dot: 'bg-rose-400 animate-pulse', text: 'text-rose-300' },
 };
 
-// EDUCATIONAL: detecta linha modificada (status mudou) e dispara highlight.
+// EDUCATIONAL: emoji por nível espelha o que o canvas mostra (sprite progressivo).
+const LEVEL_EMOJI = { 1: '🏠', 2: '🏡', 3: '🏛️' };
+const LEVEL_TEXT = { 1: 'text-slate-300', 2: 'text-amber-300', 3: 'text-violet-300' };
+
+function clampLevel(n) {
+  const v = Math.max(1, Math.min(3, Math.floor(n ?? 1)));
+  return v;
+}
+
+// EDUCATIONAL: detecta linha modificada (status ou level mudou) e dispara highlight.
 function useChangedRows(rows) {
   const lastRef = useRef(new Map());
   const [changed, setChanged] = useState(new Set());
@@ -30,7 +39,7 @@ function useChangedRows(rows) {
     const newlyChanged = new Set();
     for (const r of rows) {
       const prev = lastRef.current.get(r.id);
-      if (prev && prev.status !== r.status) newlyChanged.add(r.id);
+      if (prev && (prev.status !== r.status || prev.level !== r.level)) newlyChanged.add(r.id);
       next.set(r.id, r);
     }
     lastRef.current = next;
@@ -64,7 +73,7 @@ export default function DatabaseView() {
           </span>
         </div>
         <div className="text-[9px] text-slate-500 mt-0.5">
-          5 colunas · id INT PK · tipo VARCHAR · status VARCHAR · pos_x INT · pos_y INT
+          6 colunas · id INT PK · tipo VARCHAR · status VARCHAR · pos_x INT · pos_y INT · level INT
         </div>
       </div>
 
@@ -72,7 +81,7 @@ export default function DatabaseView() {
         {real.length === 0 ? (
           <div className="text-center text-slate-500 py-12 text-[11px]">
             <Database className="w-8 h-8 mx-auto mb-2 opacity-30" />
-            tabela vazia · plante um objeto no jogo
+            tabela vazia · construa uma casa no jogo
           </div>
         ) : (
           <div className="space-y-1.5">
@@ -80,6 +89,7 @@ export default function DatabaseView() {
               {real.map((o) => {
                 const t = TIPO[o.tipo] || TIPO.servidor;
                 const s = STATUS[o.status] || STATUS.novo;
+                const lvl = clampLevel(o.level);
                 const Icon = t.icon;
                 const isChanged = changed.has(o.id);
                 return (
@@ -99,6 +109,14 @@ export default function DatabaseView() {
                     <div className="flex items-center gap-1 text-slate-500 text-[10px] w-10 shrink-0">
                       <Hash className="w-2.5 h-2.5" />
                       <span className="text-slate-300 font-bold">{o.id}</span>
+                    </div>
+                    {/* level (emoji + número) */}
+                    <div
+                      title={`Nível ${lvl} de 3`}
+                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/5 ${LEVEL_TEXT[lvl]} text-[10px] shrink-0`}
+                    >
+                      <span className="text-sm leading-none">{LEVEL_EMOJI[lvl]}</span>
+                      <span>nv{lvl}</span>
                     </div>
                     {/* tipo badge */}
                     <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded ${t.bg} ${t.color} text-[10px]`}>
