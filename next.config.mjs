@@ -39,7 +39,18 @@ const nextConfig = {
     '/api/**/*': ['./certs/**'],
   },
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    return [
+      { source: '/:path*', headers: securityHeaders },
+      // EDUCATIONAL: o /sw.js NUNCA pode ser cacheado pelo browser/CDN, senão
+      // updates do Service Worker ficam presos. Sempre busca fresco.
+      {
+        source: '/sw.js',
+        headers: [
+          { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
+          { key: 'Service-Worker-Allowed', value: '/' },
+        ],
+      },
+    ];
   },
 };
 

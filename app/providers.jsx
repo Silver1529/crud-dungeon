@@ -10,9 +10,37 @@ function Bootstrap({ children }) {
   useCsrfBootstrap();
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
+    if (!('serviceWorker' in navigator)) return;
+    if (process.env.NODE_ENV !== 'production') return;
+
+    let reloaded = false;
+    // EDUCATIONAL: registra + força check de update + recarrega automaticamente
+    // quando uma versão nova do SW assumir controle. Resolve o "deploy não atualiza".
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      // checa update toda vez que a aba volta a ficar visível
+      reg.update().catch(() => { });
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) reg.update().catch(() => { });
+      });
+      // se um SW novo aguardando, manda ativar imediato
+      if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
+      reg.addEventListener('updatefound', () => {
+        const sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+            sw.postMessage('SKIP_WAITING');
+          }
+        });
+      });
+    }).catch(() => { });
+
+    // Quando o SW novo assume controle, recarrega a página uma vez
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloaded) return;
+      reloaded = true;
+      window.location.reload();
+    });
   }, []);
   return children;
 }
