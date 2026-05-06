@@ -54,7 +54,7 @@ export default function SqlConsole() {
   return (
     <div className="font-mono text-xs bg-gradient-to-b from-slate-950 to-slate-950/40 min-h-full">
       {/* Header em estilo terminal */}
-      <div className="px-3 py-2 border-b border-white/5 flex items-center gap-2 text-[10px] text-slate-500 sticky top-0 bg-slate-950/80 backdrop-blur z-10">
+      <div className="px-3 py-2 border-b border-white/5 flex items-center gap-2 text-[10px] text-slate-500 sticky top-0 bg-slate-950 z-10">
         <span className="flex gap-1">
           <span className="w-2 h-2 rounded-full bg-rose-500/60" />
           <span className="w-2 h-2 rounded-full bg-amber-500/60" />

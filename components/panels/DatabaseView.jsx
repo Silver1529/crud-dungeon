@@ -61,7 +61,7 @@ export default function DatabaseView() {
   return (
     <div className="font-mono text-xs">
       {/* schema header */}
-      <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02] sticky top-0 backdrop-blur z-10">
+      <div className="px-3 py-2 border-b border-white/5 bg-slate-950 sticky top-0 z-10">
         <div className="flex items-center gap-2">
           <Database className="w-3.5 h-3.5 text-violet-300" />
           <code className="text-violet-200 font-bold">cruddungeon</code>

@@ -105,7 +105,7 @@ export default function CrudLivePanel() {
         dragElastic={0}
         onDragEnd={onDragEnd}
         style={{ x: mvX, y: mvY }} // motion values = fonte da verdade, sem animate brigar
-        className="rounded-xl border border-white/10 bg-slate-950/85 backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)] overflow-hidden touch-none"
+        className="rounded-xl border border-white/10 bg-slate-950/95 shadow-[0_20px_60px_rgba(0,0,0,0.55)] overflow-hidden touch-none"
       >
         <div className="border-b border-white/5 flex items-stretch">
           {/* Grip — pega aqui pra arrastar */}

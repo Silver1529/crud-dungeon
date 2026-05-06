@@ -34,8 +34,17 @@ body {
 ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.2); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.35); }
 
-/* Glassmorphism utility */
+/* Glassmorphism utility — sem backdrop-filter.
+   PERF: backdrop-filter blur(12px) é GPU-killer. Em painéis persistentes
+   (header, HUD, side panel) sobre o canvas kaplay, força Gaussian blur
+   por frame em áreas grandes — derrubava FPS de 60 pra ~28.
+   A vibe "vidro" continua via bg translúcido + border. */
 .glass {
+  background: color-mix(in oklab, white 5%, transparent);
+  border: 1px solid color-mix(in oklab, white 10%, transparent);
+}
+/* Versão com blur — usar APENAS em modais ocasionais (overlay full-screen). */
+.glass-blur {
   background: color-mix(in oklab, white 5%, transparent);
   border: 1px solid color-mix(in oklab, white 10%, transparent);
   backdrop-filter: blur(12px) saturate(140%);

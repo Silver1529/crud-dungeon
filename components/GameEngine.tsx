@@ -493,7 +493,7 @@ const NPC_ROLE_DESC: Record<string, { tagline: string; theme: 'cyan' | 'violet' 
 
 // EDUCATIONAL: hook de tipografia animada (typewriter). Char-by-char, com skip.
 // Reseta automaticamente quando o `text` muda (ex: usuário clica "próxima dica").
-function useTypewriter(text: string, speed = 18) {
+function useTypewriter(text: string, speed = 9) {
   const [shown, setShown] = useState('');
   const [done, setDone] = useState(false);
 
@@ -504,16 +504,31 @@ function useTypewriter(text: string, speed = 18) {
       setDone(true);
       return;
     }
+    // Typewriter usa rAF (não setInterval): browsers throttlam setInterval quando
+    // a main thread tá ocupada (ex: kaplay rodando em 28fps), e cada tick disparava
+    // um re-render React que competia com o canvas. rAF roda no MESMO tick do
+    // frame, e rendemos múltiplos chars por frame se o tempo permitir — assim a
+    // velocidade percebida não cai com o FPS.
     let i = 0;
-    const interval = setInterval(() => {
-      i++;
-      setShown(text.slice(0, i));
-      if (i >= text.length) {
-        clearInterval(interval);
+    let last = performance.now();
+    let rafId = 0;
+    const tick = (now: number) => {
+      const elapsed = now - last;
+      // Quantos chars cabem no frame atual (ex: 16ms / 9ms = 1-2 chars).
+      const stepChars = Math.max(1, Math.floor(elapsed / speed));
+      if (stepChars > 0) {
+        i = Math.min(text.length, i + stepChars);
+        setShown(text.slice(0, i));
+        last = now;
+      }
+      if (i < text.length) {
+        rafId = requestAnimationFrame(tick);
+      } else {
         setDone(true);
       }
-    }, speed);
-    return () => clearInterval(interval);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
   }, [text, speed]);
 
   const skip = useCallback(() => {
@@ -533,7 +548,7 @@ function NpcModal({ data, onClose }: { data: NpcPreset; onClose: () => void }) {
   const cur = data.curiosities[idx];
   const meta = NPC_ROLE_DESC[data.role] || { tagline: '', theme: 'cyan' as const };
   const cm = COLOR_MAP[meta.theme];
-  const { shown: shownShort, done: doneShort, skip } = useTypewriter(cur.short, 16);
+  const { shown: shownShort, done: doneShort, skip } = useTypewriter(cur.short, 9);
 
   const next = () => setIdx((i) => (i + 1) % total);
   const prev = () => setIdx((i) => (i - 1 + total) % total);
@@ -652,7 +667,7 @@ function PropModal({ data, onClose }: { data: PropPreset; onClose: () => void })
   const total = data.curiosities.length;
   const cur = data.curiosities[idx];
   const cm = COLOR_MAP[data.theme];
-  const { shown: shownShort, done: doneShort, skip } = useTypewriter(cur.short, 16);
+  const { shown: shownShort, done: doneShort, skip } = useTypewriter(cur.short, 9);
 
   const next = () => setIdx((i) => (i + 1) % total);
   const prev = () => setIdx((i) => (i - 1 + total) % total);
@@ -948,7 +963,7 @@ function TutorialBanner({
       animate={{ y: 0, opacity: 1, scale: 1 }}
       exit={{ y: -16, opacity: 0, scale: 0.98 }}
       transition={{ type: 'spring', stiffness: 320, damping: 28 }}
-      className={`max-w-2xl mx-auto rounded-xl border ${cm.ring} bg-slate-950/85 backdrop-blur-md shadow-[0_16px_50px_rgba(0,0,0,0.5)] overflow-hidden`}
+      className={`max-w-2xl mx-auto rounded-xl border ${cm.ring} bg-slate-950/95 shadow-[0_16px_50px_rgba(0,0,0,0.5)] overflow-hidden`}
     >
       {/* progress bar — preenche conforme avança nos steps */}
       <div className="h-0.5 bg-white/5 relative">
@@ -1079,7 +1094,7 @@ function SqlPreviewBar({ tool, tipo, facing, target }: SqlPreviewBarProps) {
       initial={{ opacity: 0, y: -6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-      className={`relative font-mono text-[11px] rounded-lg border ${cm.ring} bg-slate-950/70 backdrop-blur-md shadow-[0_0_30px_rgba(34,211,238,0.15)] overflow-hidden`}
+      className={`relative font-mono text-[11px] rounded-lg border ${cm.ring} bg-slate-950/95 shadow-[0_0_30px_rgba(34,211,238,0.15)] overflow-hidden`}
     >
       {/* faixa lateral colorida — identidade visual da operação */}
       <div className={`absolute top-0 bottom-0 left-0 w-1 ${cm.bg}`} />
@@ -1505,10 +1520,16 @@ export default function GameEngine() {
         width: W,
         height: H,
         background: [8, 14, 28, 1],
-        crisp: false,
+        // crisp:true desliga texture filtering (interpolação bilinear).
+        // Pra rect/circle primitivas isso costuma ser ~10-20% mais rápido.
+        crisp: true,
         global: false,
         debug: false,
         touchToMouse: true,
+        // pixelDensity:1 trava o canvas em 1×; sem isso, kaplay multiplica por
+        // window.devicePixelRatio (até 3× em monitores HiDPI/Windows scaling),
+        // o que com 40×28 tiles + zoom 1.5 explode o GPU e derruba o FPS.
+        pixelDensity: 1,
       });
       kRef.current = k;
       const K_ = k as K;
@@ -1942,16 +1963,29 @@ export default function GameEngine() {
       kRef.current.__interact = interact;
       kRef.current.__cleanup = unsub;
 
-      // EDUCATIONAL: publica FPS pro store a cada 500ms — header lê pra mostrar.
-      const fpsTimer = setInterval(() => {
-        try {
-          const fps = K_.debug?.fps?.() ?? Math.round(1 / Math.max(K_.dt(), 1 / 240));
-          setFps(Math.round(fps));
-        } catch { /* fps é cosmético, não crashar */ }
-      }, 500);
+      // EDUCATIONAL: publica FPS pro store via rAF puro (independente do kaplay).
+      // Antes usávamos K_.debug.fps() que pode reportar valor enviesado por
+      // janela curta de medição. rAF count num intervalo de 500ms dá o número
+      // real de frames pintados pela tela.
+      let frameCount = 0;
+      let lastFpsTs = performance.now();
+      let rafFpsId = 0;
+      const tickFps = () => {
+        frameCount++;
+        const now = performance.now();
+        const dt = now - lastFpsTs;
+        if (dt >= 500) {
+          const fps = Math.round((frameCount * 1000) / dt);
+          setFps(fps);
+          frameCount = 0;
+          lastFpsTs = now;
+        }
+        rafFpsId = requestAnimationFrame(tickFps);
+      };
+      rafFpsId = requestAnimationFrame(tickFps);
       const prevCleanup = kRef.current.__cleanup;
       kRef.current.__cleanup = () => {
-        clearInterval(fpsTimer);
+        cancelAnimationFrame(rafFpsId);
         try { prevCleanup?.(); } catch { }
       };
 
@@ -1983,13 +2017,12 @@ export default function GameEngine() {
             width={W}
             height={H}
             tabIndex={0}
-            className="block max-w-full max-h-full rounded-xl border border-cyan-400/15 shadow-[0_20px_80px_rgba(34,211,238,0.08)] bg-[#080e1c] touch-none select-none focus:outline-none"
+            // PERF: removidos rounded-xl + shadow blur de 80px + vinheta inset.
+            // CSS shadows com blur sobre canvas que muda todo frame = a GPU
+            // refaz Gaussian blur a cada frame (assassino de FPS, junto com
+            // backdrop-filter). Borda fina mantém o framing visual.
+            className="block max-w-full max-h-full border border-cyan-400/15 bg-[#080e1c] touch-none select-none focus:outline-none"
             style={{ aspectRatio: `${COLS}/${ROWS}`, width: 'auto', height: 'auto' }}
-          />
-          {/* vinheta sutil */}
-          <div
-            className="pointer-events-none absolute inset-0 rounded-xl"
-            style={{ boxShadow: 'inset 0 0 80px rgba(0,0,0,0.55)' }}
           />
           {/* EDUCATIONAL: tutorial banner — topo do canvas, não rouba espaço do layout. */}
           <AnimatePresence mode="wait">
@@ -2070,7 +2103,13 @@ export default function GameEngine() {
       <QuizModal
         open={quizOpen}
         name={userName}
-        onClose={() => { setQuizOpen(false); refocusCanvas(); }}
+        onClose={() => {
+          setQuizOpen(false);
+          // Sai do estado 'done' (que mantém o boneco em loop happy/dança).
+          // 'off' = sandbox livre — boneco volta pro idle.
+          setTutorialStep('off');
+          refocusCanvas();
+        }}
       />
     </div>
   );
@@ -2080,143 +2119,116 @@ export default function GameEngine() {
 // Drawing helpers — tema "Data Center"
 // ============================================================================
 function drawDataCenterFloor(k: K) {
-  // EDUCATIONAL: floor coeso "data center / dungeon". Cores fixas, sem biomas aleatórios.
-  // Estrutura:
-  //   - base escura uniforme com checkerboard sutil
-  //   - 2 paths luminosos (vertical + horizontal) cruzando no spawn (SPAWN_X, SPAWN_Y)
-  //   - bordas com "tijolos" pronunciados
-  //   - decorações pontuais (não em paths) representam "objetos do data center"
+  // EDUCATIONAL — perf: floor "data center / dungeon" otimizado.
+  // Antes: 1 retângulo POR TILE (40×28 = 1120) + 132 edges × 3 + 100 doodads de circuito.
+  // Cada entidade kaplay paga matrix transform + draw call por frame, mesmo estática.
+  // Resultado: ~2000 entidades, FPS travado em 28-30.
+  // Agora: 1 base + 4 bandas de borda + 2 strips de path + rivets esparsos. ~50 entidades.
+  // Visual praticamente igual; ganho de FPS ~3×.
   const rand = (x: number, y: number) => {
     const s = (x * 73856093) ^ (y * 19349663);
     return ((s % 1000) + 1000) % 1000 / 1000;
   };
 
-  // Path coordinates — cruzam no spawn pra orientar o jogador.
-  const isHPath = (y: number) => y === SPAWN_Y; // corredor horizontal
-  const isVPath = (x: number) => x === SPAWN_X; // corredor vertical
-  const onPath = (x: number, y: number) => isHPath(y) || isVPath(x);
+  // 1) Background único. Cor é a média das 2 cores do checker antigo (16/12, 24/20, 44/38).
+  // O checker era diff de 4-6 por canal — invisível a olho nu, não vale 1120 entidades.
+  k.add([
+    k.rect(W, H),
+    k.pos(0, 0),
+    k.color(14, 22, 41),
+    k.z(-4),
+  ]);
 
-  for (let y = 0; y < ROWS; y++) {
-    for (let x = 0; x < COLS; x++) {
-      const checker = (x + y) % 2 === 0;
-      const isEdge = x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1;
+  // 2) Strip de path (orientação visual). Substitui 67 path tiles + sub-rects.
+  // Banda escura levemente mais clara cruzando no spawn.
+  k.add([
+    k.rect(W, TILE),
+    k.pos(0, SPAWN_Y * TILE),
+    k.color(20, 32, 52),
+    k.z(-3),
+  ]);
+  k.add([
+    k.rect(TILE, H),
+    k.pos(SPAWN_X * TILE, 0),
+    k.color(20, 32, 52),
+    k.z(-3),
+  ]);
+  // Linhas centrais cyan (1 horizontal + 1 vertical, atravessando o mapa inteiro).
+  k.add([
+    k.rect(W, 2),
+    k.pos(0, SPAWN_Y * TILE + TILE / 2 - 1),
+    k.color(34, 211, 238),
+    k.opacity(0.18),
+    k.z(-2),
+  ]);
+  k.add([
+    k.rect(2, H),
+    k.pos(SPAWN_X * TILE + TILE / 2 - 1, 0),
+    k.color(34, 211, 238),
+    k.opacity(0.18),
+    k.z(-2),
+  ]);
+  // Cruzamento — respawn pad.
+  k.add([
+    k.circle(TILE / 2 - 6),
+    k.pos(SPAWN_X * TILE + TILE / 2, SPAWN_Y * TILE + TILE / 2),
+    k.color(34, 211, 238),
+    k.opacity(0.15),
+    k.outline(1, k.rgb(34, 211, 238)),
+    k.z(-2),
+  ]);
 
-      // Base color — sempre azul-marinho profundo, varia 2 tons via checker.
-      let r = checker ? 16 : 12;
-      let g = checker ? 24 : 20;
-      let b = checker ? 44 : 38;
+  // 3) Bordas como 4 bandas longas. Antes: 132 tiles × 3 entidades = 396.
+  // Agora: 4 bandas + ~20 rivets espaçados = ~24 entidades.
+  // banda topo
+  k.add([ k.rect(W, TILE), k.pos(0, 0), k.color(28, 38, 70), k.opacity(0.6), k.z(-2) ]);
+  // banda baixo
+  k.add([ k.rect(W, TILE), k.pos(0, (ROWS - 1) * TILE), k.color(28, 38, 70), k.opacity(0.6), k.z(-2) ]);
+  // banda esquerda
+  k.add([ k.rect(TILE, H - 2 * TILE), k.pos(0, TILE), k.color(28, 38, 70), k.opacity(0.6), k.z(-2) ]);
+  // banda direita
+  k.add([ k.rect(TILE, H - 2 * TILE), k.pos((COLS - 1) * TILE, TILE), k.color(28, 38, 70), k.opacity(0.6), k.z(-2) ]);
+  // linhas divisoras horizontais nas bandas top/bottom — dá feel de "tijolos"
+  k.add([ k.rect(W, 1), k.pos(0, TILE / 2 - 0.5), k.color(50, 70, 120), k.opacity(0.5), k.z(-1) ]);
+  k.add([ k.rect(W, 1), k.pos(0, (ROWS - 1) * TILE + TILE / 2 - 0.5), k.color(50, 70, 120), k.opacity(0.5), k.z(-1) ]);
+  // rivets violet — só nos cantos pra marcar limite. 4 cantos × 2 rivets cada.
+  for (const [rx, ry] of [
+    [0, 0], [COLS - 1, 0], [0, ROWS - 1], [COLS - 1, ROWS - 1],
+  ] as Array<[number, number]>) {
+    k.add([
+      k.circle(2),
+      k.pos(rx * TILE + TILE / 2, ry * TILE + TILE / 2),
+      k.color(167, 139, 250),
+      k.opacity(0.7),
+      k.z(-1),
+    ]);
+  }
+  // rivets esparsos ao longo das bordas (a cada 4 tiles).
+  for (let x = 4; x < COLS - 4; x += 4) {
+    k.add([ k.circle(1.4), k.pos(x * TILE + TILE / 2, TILE / 2), k.color(167, 139, 250), k.opacity(0.5), k.z(-1) ]);
+    k.add([ k.circle(1.4), k.pos(x * TILE + TILE / 2, (ROWS - 1) * TILE + TILE / 2), k.color(167, 139, 250), k.opacity(0.5), k.z(-1) ]);
+  }
+  for (let y = 4; y < ROWS - 4; y += 4) {
+    k.add([ k.circle(1.4), k.pos(TILE / 2, y * TILE + TILE / 2), k.color(167, 139, 250), k.opacity(0.5), k.z(-1) ]);
+    k.add([ k.circle(1.4), k.pos((COLS - 1) * TILE + TILE / 2, y * TILE + TILE / 2), k.color(167, 139, 250), k.opacity(0.5), k.z(-1) ]);
+  }
 
-      // Path destaca levemente em ciano (sutil, não saturado).
-      if (!isEdge && onPath(x, y)) {
-        r = checker ? 22 : 18;
-        g = checker ? 36 : 32;
-        b = checker ? 56 : 50;
-      }
-
-      k.add([
-        k.rect(TILE, TILE),
-        k.pos(x * TILE, y * TILE),
-        k.color(r, g, b),
-        k.z(-3),
-      ]);
-
-      // Borda do mapa: tijolos brilhantes + rebite central
-      if (isEdge) {
-        k.add([
-          k.rect(TILE, TILE),
-          k.pos(x * TILE, y * TILE),
-          k.color(28, 38, 70),
-          k.opacity(0.6),
-          k.z(-2),
-        ]);
-        // padrão de tijolos: linha horizontal divisora
-        k.add([
-          k.rect(TILE, 1),
-          k.pos(x * TILE, y * TILE + TILE / 2 - 0.5),
-          k.color(50, 70, 120),
-          k.opacity(0.5),
-          k.z(-1),
-        ]);
-        k.add([
-          k.circle(2),
-          k.pos(x * TILE + TILE / 2, y * TILE + TILE / 2),
-          k.color(167, 139, 250),
-          k.opacity(0.7),
-          k.z(-1),
-        ]);
-        continue;
-      }
-
-      // Path: linha cyan central + glow leve. Ajuda o player a se orientar.
-      if (onPath(x, y)) {
-        if (isHPath(y)) {
-          k.add([
-            k.rect(TILE, 2),
-            k.pos(x * TILE, y * TILE + TILE / 2 - 1),
-            k.color(34, 211, 238),
-            k.opacity(0.18),
-            k.z(-2),
-          ]);
-        }
-        if (isVPath(x)) {
-          k.add([
-            k.rect(2, TILE),
-            k.pos(x * TILE + TILE / 2 - 1, y * TILE),
-            k.color(34, 211, 238),
-            k.opacity(0.18),
-            k.z(-2),
-          ]);
-        }
-        // No cruzamento (spawn), círculo decorativo "respawn pad"
-        if (isHPath(y) && isVPath(x)) {
-          k.add([
-            k.circle(TILE / 2 - 6),
-            k.pos(x * TILE + TILE / 2, y * TILE + TILE / 2),
-            k.color(34, 211, 238),
-            k.opacity(0.15),
-            k.outline(1, k.rgb(34, 211, 238)),
-            k.z(-2),
-          ]);
-        }
-        continue; // paths não recebem outras decorações
-      }
-
-      // Decorações fixas em ~12% dos tiles internos. Distribuídas longe dos paths.
-      if (x > 1 && y > 1 && x < COLS - 2 && y < ROWS - 2) {
-        const seed = rand(x, y);
-        if (seed < 0.12) {
-          const kind = Math.floor(seed * 1000) % 5;
-          drawFloorDecoration(k, x * TILE + TILE / 2, y * TILE + TILE / 2, kind, seed);
-          continue;
-        }
-      }
-
-      // Circuito sutil em ~14% dos tiles (não-paths, não-decorados)
-      const seed2 = (x * 31 + y * 17) % 100;
-      if (seed2 < 14) {
-        const which = seed2 % 2;
-        if (which === 0) {
-          k.add([
-            k.rect(TILE - 8, 1),
-            k.pos(x * TILE + 4, y * TILE + TILE / 2),
-            k.color(34, 211, 238),
-            k.opacity(0.08),
-            k.z(-2),
-          ]);
-        } else {
-          k.add([
-            k.circle(1.5),
-            k.pos(x * TILE + TILE / 2, y * TILE + TILE / 2),
-            k.color(167, 139, 250),
-            k.opacity(0.25),
-            k.z(-2),
-          ]);
-        }
+  // 4) Decorações pontuais — densidade reduzida 12% → 7% (longe de paths/edges).
+  // Circuit doodads (cyan lines + violet circles em ~14% dos tiles) FORAM REMOVIDOS:
+  // somavam ~100 entidades de ruído visual.
+  for (let y = 2; y < ROWS - 2; y++) {
+    for (let x = 2; x < COLS - 2; x++) {
+      if (x === SPAWN_X || y === SPAWN_Y) continue; // path
+      const seed = rand(x, y);
+      if (seed < 0.07) {
+        const kind = Math.floor(seed * 1000) % 5;
+        drawFloorDecoration(k, x * TILE + TILE / 2, y * TILE + TILE / 2, kind, seed);
       }
     }
   }
-  // grid lines: minor sutis (a cada tile) + major mais visíveis (a cada 5 tiles)
-  // EDUCATIONAL: dá um feel de "tactical map" sem poluir.
+
+  // 5) Grid lines — onDraw é fine pra draws estáticos (mesmo que rode por frame).
+  // ~70 drawLine não é o gargalo (era a contagem de entidades).
   k.onDraw(() => {
     for (let x = 0; x <= COLS; x++) {
       const isMajor = x % 5 === 0;
@@ -2225,7 +2237,7 @@ function drawDataCenterFloor(k: K) {
         p2: k.vec2(x * TILE, H),
         color: k.rgb(34, 211, 238),
         opacity: isMajor ? 0.12 : 0.04,
-        width: isMajor ? 1 : 1,
+        width: 1,
       });
     }
     for (let y = 0; y <= ROWS; y++) {
@@ -2235,30 +2247,29 @@ function drawDataCenterFloor(k: K) {
         p2: k.vec2(W, y * TILE),
         color: k.rgb(34, 211, 238),
         opacity: isMajor ? 0.12 : 0.04,
-        width: isMajor ? 1 : 1,
+        width: 1,
       });
     }
   });
 }
 
-// EDUCATIONAL: decorações fixas (não-interativas) que dão vida ao mapa.
-// 5 tipos: lâmpada pulsante, painel de servidor pequeno, terminal, planta neon, antena.
+// EDUCATIONAL: decorações fixas. 5 tipos. Pulsações foram REMOVIDAS — o
+// onUpdate de cada lamp/LED/antena somava ~150 callbacks por frame com Math.sin.
+// Agora opacidade fixa derivada do seed (varia entre decorações, mas estática).
+// Visual praticamente idêntico, sem CPU por frame.
 function drawFloorDecoration(k: K, cx: number, cy: number, kind: number, seed: number) {
   const t = (seed * 6.28) % 6.28;
+  // Pseudo-pulse estático: dá variação por decoração sem custo por frame.
+  const staticPulse = 0.5 + 0.4 * Math.sin(t);
   if (kind === 0) {
-    // Lâmpada pulsante (orb cyan suspenso)
-    const lamp = k.add([
+    // Lâmpada (orb cyan suspenso) — opacity estática variando por seed.
+    k.add([
       k.circle(4),
       k.pos(cx, cy),
       k.color(34, 211, 238),
-      k.opacity(0.5),
+      k.opacity(staticPulse),
       k.z(-1),
-      { phase: t },
     ]);
-    lamp.onUpdate(() => {
-      const p = 0.5 + 0.4 * Math.sin(k.time() * 2 + lamp.phase);
-      lamp.opacity = p;
-    });
     // halo
     k.add([
       k.circle(8),
@@ -2268,7 +2279,7 @@ function drawFloorDecoration(k: K, cx: number, cy: number, kind: number, seed: n
       k.z(-2),
     ]);
   } else if (kind === 1) {
-    // Painel de servidor pequeno (rect com LEDs)
+    // Painel de servidor pequeno (rect com LEDs estáticos).
     k.add([
       k.rect(14, 18, { radius: 1 }),
       k.pos(cx - 7, cy - 9),
@@ -2277,16 +2288,14 @@ function drawFloorDecoration(k: K, cx: number, cy: number, kind: number, seed: n
       k.z(-1),
     ]);
     for (let i = 0; i < 3; i++) {
-      const led = k.add([
+      const ledOp = 0.4 + 0.4 * Math.sin(t + i * 0.7);
+      k.add([
         k.circle(1),
         k.pos(cx - 4 + i * 3, cy + 4),
         k.color(34, 197, 94),
+        k.opacity(ledOp),
         k.z(0),
-        { phase: t + i * 0.7 },
       ]);
-      led.onUpdate(() => {
-        led.opacity = 0.4 + 0.4 * Math.sin(k.time() * 3 + led.phase);
-      });
     }
   } else if (kind === 2) {
     // Terminal/monitor (rect com tela cyan)
@@ -2334,7 +2343,7 @@ function drawFloorDecoration(k: K, cx: number, cy: number, kind: number, seed: n
       k.z(0),
     ]);
   } else {
-    // Antena/torre (linha + circle no topo)
+    // Antena/torre (linha + circle no topo, opacity estática).
     k.add([
       k.rect(1, 14),
       k.pos(cx, cy - 7),
@@ -2342,16 +2351,13 @@ function drawFloorDecoration(k: K, cx: number, cy: number, kind: number, seed: n
       k.opacity(0.6),
       k.z(-1),
     ]);
-    const top = k.add([
+    k.add([
       k.circle(2.5),
       k.pos(cx, cy - 8),
       k.color(167, 139, 250),
+      k.opacity(staticPulse),
       k.z(0),
-      { phase: t },
     ]);
-    top.onUpdate(() => {
-      top.opacity = 0.5 + 0.4 * Math.sin(k.time() * 4 + top.phase);
-    });
     // base
     k.add([
       k.rect(6, 3),

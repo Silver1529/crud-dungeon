@@ -40,7 +40,7 @@ export default function ActivityLog() {
   return (
     <div className="font-mono text-xs bg-gradient-to-b from-slate-950 to-slate-950/40 min-h-full">
       {/* Header estilo "Activity Log" do mockup */}
-      <div className="px-3 py-2 border-b border-white/5 flex items-center gap-2 sticky top-0 bg-slate-950/80 backdrop-blur z-10">
+      <div className="px-3 py-2 border-b border-white/5 flex items-center gap-2 sticky top-0 bg-slate-950 z-10">
         <Activity className="w-3.5 h-3.5 text-cyan-300" />
         <span className="text-cyan-200 font-mono text-[11px] tracking-wider">Activity Log</span>
         <button
