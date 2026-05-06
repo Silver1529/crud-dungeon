@@ -52,6 +52,25 @@ function playNote({ freq, freqEnd, duration, type = 'sine', gain = 1, delay = 0 
   } catch { /* sound errors are non-fatal */ }
 }
 
+// EDUCATIONAL: cache de HTMLAudioElement por URL — toca samples reais do /public.
+// Cada chamada reseta currentTime pra começar do zero (não fila som em si mesmo).
+const audioCache = new Map<string, HTMLAudioElement>();
+function playSample(url: string, volume = 0.6) {
+  if (muted) return;
+  if (typeof window === 'undefined') return;
+  try {
+    let el = audioCache.get(url);
+    if (!el) {
+      el = new Audio(url);
+      el.preload = 'auto';
+      audioCache.set(url, el);
+    }
+    el.currentTime = 0;
+    el.volume = volume;
+    void el.play().catch(() => { /* autoplay policy / user-gesture pode bloquear */ });
+  } catch { /* sound errors são non-fatal */ }
+}
+
 // EDUCATIONAL: cada operação CRUD tem identidade sonora própria.
 export const sfx = {
   move: () => playNote({ freq: 380, duration: 0.04, type: 'square', gain: 0.4 }),
@@ -80,4 +99,7 @@ export const sfx = {
     playNote({ freq: 659, duration: 0.1, type: 'triangle', gain: 0.7, delay: 0.1 });
     playNote({ freq: 784, duration: 0.2, type: 'triangle', gain: 0.7, delay: 0.2 });
   },
+  // EDUCATIONAL: latido real do /public/audio cachorro.mp3 (file com espaço no nome).
+  // URL-encode: %20 substitui o espaço pra fetch correto.
+  dogBark: () => playSample('/audio%20cachorro.mp3', 0.7),
 };

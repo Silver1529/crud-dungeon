@@ -28,11 +28,16 @@ export interface FacingTile { x: number; y: number; }
 export type K = any;
 
 // ===== Geometria do tabuleiro =====
+// EDUCATIONAL: 40×28 = 1120 tiles. Câmera com zoom 1.5× compensa o tamanho.
+// Posições antigas (até 19/14) continuam válidas no novo grid.
 export const TILE = 48;
-export const COLS = 20;
-export const ROWS = 15;
+export const COLS = 40;
+export const ROWS = 28;
 export const W = COLS * TILE;
 export const H = ROWS * TILE;
+export const SPAWN_X = 20;
+export const SPAWN_Y = 14;
+export const CAM_SCALE = 1.5;
 
 // ===== Metadados visuais por tipo / status / tool =====
 export const TIPO_META: Record<Tipo, { color: [number, number, number]; label: string; icon: ComponentType<{ className?: string }> }> = {

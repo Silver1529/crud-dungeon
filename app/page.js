@@ -18,11 +18,11 @@ export default function Page() {
           <div className="flex items-center gap-2 min-w-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/favicon.ico"
+              src="/logo.png"
               alt="CRUD Dungeon"
-              width={32}
-              height={32}
-              className="rounded-md shadow-[0_0_18px_rgba(34,211,238,0.25)] shrink-0"
+              width={36}
+              height={36}
+              className="rounded-md shadow-[0_0_18px_rgba(34,211,238,0.25)] shrink-0 object-contain"
             />
             <div className="min-w-0">
               <h1 className="font-mono text-cyan-400 text-sm sm:text-base truncate leading-tight">

@@ -12,8 +12,8 @@ export default function TutorialReplayButton() {
 
   const onClick = () => {
     try {
-      localStorage.removeItem(TUTORIAL_DONE_KEY);
-      localStorage.removeItem(QUIZ_DONE_KEY);
+      sessionStorage.removeItem(TUTORIAL_DONE_KEY);
+      sessionStorage.removeItem(QUIZ_DONE_KEY);
     } catch { }
     // Se já tem nome, vai direto pro intro; senão, do começo (name).
     setTutorialStep(userName ? 'intro' : 'name');

@@ -75,7 +75,7 @@ export default function EditPlayerButton() {
 
   const onSave = () => {
     setPlayerCustom(draft);
-    try { localStorage.setItem(PLAYER_CUSTOM_KEY, JSON.stringify(draft)); } catch { }
+    try { sessionStorage.setItem(PLAYER_CUSTOM_KEY, JSON.stringify(draft)); } catch { }
     setOpen(false);
   };
 

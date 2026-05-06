@@ -3,7 +3,7 @@
 // EDUCATIONAL: engine 2D real (Kaplay) com tema "Data Center" e camada didática.
 // Para quem nunca mexeu em código: cada AÇÃO aqui dispara um SQL real no banco.
 // Você vê o SQL antes (preview) e depois (no painel CRUD Live à direita).
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { Fragment, useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles, BookOpen, ChevronRight, Keyboard, Search, MapPin, Hash, X } from 'lucide-react';
 import { useGameStore } from '@/lib/store';
@@ -20,7 +20,7 @@ import {
   type Tipo, type Tool, type Status, type Direction, type Objeto, type FacingTile, type K,
   type Level, type PlayerCustom, type ShirtKey, type HatKey, type SkinKey,
   type TutStep, type ActiveTutStep,
-  TILE, COLS, ROWS, W, H,
+  TILE, COLS, ROWS, W, H, SPAWN_X, SPAWN_Y, CAM_SCALE,
   TIPO_META, STATUS_META, LEVEL_META, TOOL_META, COLOR_MAP, PLAYER_PRESETS,
   USER_NAME_KEY, TUTORIAL_DONE_KEY, PLAYER_CUSTOM_KEY, QUIZ_DONE_KEY,
   clampLevel,
@@ -202,93 +202,216 @@ function PlayerPreview({ custom }: { custom: PlayerCustom }) {
   );
 }
 
+// EDUCATIONAL: cores de tipo em hex pra UI (espelha TIPO_META mas em formato CSS).
+const TIPO_HEX: Record<Tipo, { hex: string; label: string }> = {
+  servidor: { hex: '#22d3ee', label: 'cyan' },
+  banco:    { hex: '#a78bfa', label: 'violet' },
+  cache:    { hex: '#fbbf24', label: 'âmbar' },
+  router:   { hex: '#10b981', label: 'emerald' },
+};
+
+const STATUS_HEX: Record<Status, { hex: string; label: string; meaning: string }> = {
+  novo:    { hex: '#94a3b8', label: 'cinza',  meaning: 'recém-criada (level 1)' },
+  ativo:   { hex: '#22c55e', label: 'verde',  meaning: 'evoluída (level 2)' },
+  upgrade: { hex: '#eab308', label: 'âmbar',  meaning: 'avançada (level 3)' },
+  critico: { hex: '#ef4444', label: 'rosa',   meaning: 'estado crítico (raro)' },
+};
+
 // EDUCATIONAL: modal exibido após INSPECT (GET /api/objetos/:id).
-// Mostra os dados crus da linha lida, com a SQL que rodou e a tradução em PT-BR.
+// Layout: hero com progression bar de níveis + legenda de cores + tabela + SQL anotado.
 function InspectModal({ data, onClose }: { data: Objeto; onClose: () => void }) {
   const lvl = clampLevel(data.level);
   const lm = LEVEL_META[lvl];
   const tipoMeta = TIPO_META[data.tipo];
   const TipoIcon = tipoMeta.icon;
-  const sql = `SELECT id, tipo, status, pos_x, pos_y, level\nFROM game_objects\nWHERE id = ${data.id};`;
+  const tipoH = TIPO_HEX[data.tipo];
+  const statusH = STATUS_HEX[data.status] ?? STATUS_HEX.novo;
 
   return (
     <ModalShell>
-      <div className="flex items-center gap-3 mb-3">
-        <Search className="w-5 h-5 text-cyan-300" />
-        <div>
-          <h2 className="font-mono text-lg text-cyan-300">INSPECT · casa #{data.id}</h2>
-          <p className="text-[11px] text-slate-400 font-mono">SELECT WHERE id = {data.id} · 1 linha lida</p>
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-9 h-9 rounded-lg bg-cyan-400/15 border border-cyan-400/40 flex items-center justify-center shrink-0">
+          <Search className="w-4 h-4 text-cyan-300" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="font-mono text-base text-cyan-200">INSPECT · casa #{data.id}</h2>
+          <p className="text-[11px] text-slate-400 font-mono leading-tight">
+            <code className="text-violet-300">SELECT</code> ... <code className="text-violet-300">WHERE</code> id = {data.id} · 1 linha lida
+          </p>
         </div>
         <button
           onClick={onClose}
-          className="ml-auto text-slate-500 hover:text-slate-200 p-1 rounded"
+          className="text-slate-500 hover:text-slate-200 p-1 rounded shrink-0"
           aria-label="fechar"
         >
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      {/* Header com sprite + status */}
-      <div className="rounded-xl border border-white/5 bg-gradient-to-br from-cyan-500/5 to-violet-500/5 p-4 mb-4 flex items-center gap-3">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={lm.sprite}
-          alt={`Casa nível ${lvl}`}
-          width={64}
-          height={64}
-          className="rounded-lg shadow-[0_0_30px_rgba(34,211,238,0.2)]"
-          style={{ imageRendering: 'pixelated' }}
+      {/* HERO — sprite grande + level + progression bar */}
+      <div
+        className="relative rounded-xl border p-4 mb-4 overflow-hidden"
+        style={{
+          borderColor: `${tipoH.hex}33`,
+          background: `linear-gradient(135deg, ${tipoH.hex}10, ${statusH.hex}08)`,
+        }}
+      >
+        <div
+          className="absolute -top-10 -right-10 w-40 h-40 rounded-full opacity-20 blur-3xl pointer-events-none"
+          style={{ backgroundColor: tipoH.hex }}
         />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-2xl">{lm.emoji}</span>
-            <span className="font-mono text-sm text-cyan-200">casa nível {lvl}</span>
-            <span className="text-[10px] font-mono text-slate-500">({lm.label})</span>
+        <div className="relative flex items-center gap-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lm.sprite}
+            alt={`Casa nível ${lvl}`}
+            width={80}
+            height={80}
+            className="rounded-lg shrink-0"
+            style={{ imageRendering: 'pixelated', filter: 'drop-shadow(0 6px 16px rgba(0,0,0,0.5))' }}
+          />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-0.5">
+              <span className="text-2xl">{lm.emoji}</span>
+              <span className="font-mono text-base text-slate-100">casa nível {lvl}</span>
+            </div>
+            <p className="text-[11px] text-slate-400 font-mono">
+              {lm.label} · {lvl} de 3 evoluções
+            </p>
+            <div className="flex items-center gap-1.5 mt-2 text-[11px] font-mono">
+              <span style={{ color: tipoH.hex }} className="inline-flex">
+                <TipoIcon className="w-3.5 h-3.5" />
+              </span>
+              <span style={{ color: tipoH.hex }}>{data.tipo}</span>
+              <span className="text-slate-600">·</span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: statusH.hex }} />
+                <span style={{ color: statusH.hex }}>{data.status}</span>
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-1.5 mt-1.5 text-[11px] font-mono text-slate-400">
-            <TipoIcon className="w-3.5 h-3.5" />
-            <span>tipo: <span className="text-slate-200">{data.tipo}</span></span>
-            <span className="ml-2">·</span>
-            <span>status: <span className="text-slate-200">{data.status}</span></span>
+        </div>
+
+        {/* PROGRESSION BAR — 3 sprites em sequência com a atual destacada */}
+        <div className="relative mt-4 pt-3 border-t border-white/5">
+          <div className="text-[9px] font-mono text-slate-500 uppercase tracking-[0.18em] mb-2">
+            evolução
+          </div>
+          <div className="flex items-center gap-2">
+            {([1, 2, 3] as const).map((L, i) => {
+              const lm2 = LEVEL_META[L];
+              const isCurrent = L === lvl;
+              const isPast = L < lvl;
+              return (
+                <Fragment key={L}>
+                  <div
+                    className={`flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border transition-all ${
+                      isCurrent
+                        ? 'border-cyan-400/60 bg-cyan-400/10 shadow-[0_0_20px_rgba(34,211,238,0.25)] scale-105'
+                        : isPast
+                        ? 'border-emerald-400/30 bg-emerald-400/5'
+                        : 'border-white/5 bg-white/[0.02] opacity-45'
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={lm2.sprite}
+                      alt={`nv${L}`}
+                      width={28}
+                      height={28}
+                      style={{ imageRendering: 'pixelated' }}
+                    />
+                    <div className="text-[9px] font-mono text-slate-300 leading-none">
+                      nv{L}
+                    </div>
+                  </div>
+                  {i < 2 && (
+                    <div className={`text-base ${L < lvl ? 'text-emerald-400' : 'text-slate-600'}`}>→</div>
+                  )}
+                </Fragment>
+              );
+            })}
+            <div className="ml-auto text-[10px] font-mono text-slate-500 leading-tight text-right">
+              {lvl < 3
+                ? `${3 - lvl} UPDATE${3 - lvl === 1 ? '' : 's'}\nrestante${3 - lvl === 1 ? '' : 's'}`
+                : 'nível MÁXIMO'}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Tabela "linha do banco" */}
+      {/* COLOR LEGEND — explica o que cada cor significa nessa casa */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2.5">
+          <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">
+            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: tipoH.hex }} />
+            cor por tipo
+          </div>
+          <div className="text-[11px] font-mono text-slate-200">
+            <span style={{ color: tipoH.hex }}>{data.tipo}</span> = {tipoH.label}
+          </div>
+          <div className="text-[10px] text-slate-500 leading-snug mt-0.5">
+            os 4 tipos: servidor·cyan, banco·violet, cache·âmbar, router·emerald
+          </div>
+        </div>
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2.5">
+          <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">
+            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: statusH.hex }} />
+            cor por status
+          </div>
+          <div className="text-[11px] font-mono text-slate-200">
+            <span style={{ color: statusH.hex }}>{data.status}</span> = {statusH.label}
+          </div>
+          <div className="text-[10px] text-slate-500 leading-snug mt-0.5">
+            {statusH.meaning}
+          </div>
+        </div>
+      </div>
+
+      {/* DATA TABLE — campos com explicação curta de cada um */}
       <div className="rounded-lg border border-white/5 bg-white/[0.02] overflow-hidden mb-4">
         <div className="px-3 py-1.5 bg-white/[0.03] border-b border-white/5 text-[10px] font-mono text-slate-400">
           <code className="text-violet-200 font-bold">cruddungeon</code>
           <span className="text-slate-500">.</span>
           <code className="text-cyan-300 font-bold">game_objects</code>
-          <span className="ml-2 text-slate-500">· 1 linha</span>
+          <span className="ml-2 text-slate-500">· 1 linha · 6 colunas</span>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5 px-3 py-2 text-[11px] font-mono">
-          <div className="flex items-center gap-1.5"><Hash className="w-3 h-3 text-slate-500" /><span className="text-slate-500">id</span></div>
-          <div className="text-slate-100 col-span-1 sm:col-span-2">{data.id}</div>
-          <div className="text-slate-500">tipo</div>
-          <div className="text-slate-100 col-span-1 sm:col-span-2">{data.tipo}</div>
-          <div className="text-slate-500">status</div>
-          <div className="text-slate-100 col-span-1 sm:col-span-2">{data.status}</div>
-          <div className="text-slate-500">level</div>
-          <div className="text-slate-100 col-span-1 sm:col-span-2">{lvl} <span className="text-slate-500">/ 3</span></div>
-          <div className="flex items-center gap-1.5"><MapPin className="w-3 h-3 text-slate-500" /><span className="text-slate-500">pos</span></div>
-          <div className="text-slate-100 col-span-1 sm:col-span-2">({data.pos_x}, {data.pos_y})</div>
+        <div className="divide-y divide-white/[0.04]">
+          <InspectField icon={<Hash className="w-3 h-3" />} label="id" value={String(data.id)} hint="AUTO_INCREMENT — o banco gera, nunca reusa" />
+          <InspectField label="tipo" value={data.tipo} hint="categoria visual (cor do badge)" valueColor={tipoH.hex} />
+          <InspectField label="status" value={data.status} hint="estado lógico (dot colorido)" valueColor={statusH.hex} />
+          <InspectField label="level" value={`${lvl} / 3`} hint="quantos UPDATEs já rodaram nessa linha" valueColor="#22d3ee" />
+          <InspectField icon={<MapPin className="w-3 h-3" />} label="pos" value={`(${data.pos_x}, ${data.pos_y})`} hint="coordenadas no grid 28×20" />
         </div>
       </div>
 
-      {/* SQL que rodou */}
+      {/* SQL ANOTADO — cada linha com comentário explicativo */}
       <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 overflow-hidden mb-4">
-        <div className="px-3 py-1.5 bg-cyan-400/10 border-b border-cyan-400/20 text-[10px] font-mono text-cyan-200 uppercase tracking-wider">
-          SQL executado
+        <div className="px-3 py-1.5 bg-cyan-400/10 border-b border-cyan-400/20 text-[10px] font-mono text-cyan-200 uppercase tracking-wider flex items-center gap-2">
+          <Search className="w-3 h-3" />
+          SQL executado · anotado
         </div>
-        <pre className="px-3 py-2 text-[11px] font-mono text-slate-200 leading-relaxed whitespace-pre-wrap">
-          {highlightSql(sql)}
-        </pre>
+        <div className="px-3 py-2 text-[11px] font-mono space-y-1">
+          <div className="flex items-baseline gap-3">
+            <code className="text-slate-200 flex-1"><span className="text-violet-300 font-bold">SELECT</span> id, tipo, status, pos_x, pos_y, level</code>
+            <span className="text-[9px] text-slate-500 italic shrink-0">// 6 colunas escolhidas</span>
+          </div>
+          <div className="flex items-baseline gap-3">
+            <code className="text-slate-200 flex-1"><span className="text-violet-300 font-bold">FROM</span> game_objects</code>
+            <span className="text-[9px] text-slate-500 italic shrink-0">// tabela alvo</span>
+          </div>
+          <div className="flex items-baseline gap-3">
+            <code className="text-slate-200 flex-1"><span className="text-violet-300 font-bold">WHERE</span> id = <span className="text-cyan-300">{data.id}</span>;</code>
+            <span className="text-[9px] text-slate-500 italic shrink-0">// filtro pelo PK</span>
+          </div>
+        </div>
       </div>
 
       <p className="text-[11px] text-slate-400 leading-relaxed mb-4">
         <strong className="text-cyan-200">READ-detalhe</strong> é o GET mais comum em apps reais — buscar UMA linha
         pelo id, sem trazer a tabela inteira. É o que acontece quando você clica num produto e a página carrega só ele.
+        Sem o <code className="text-violet-300">WHERE</code>, viria a tabela TODA — devastador em prod.
       </p>
 
       <button
@@ -297,6 +420,351 @@ function InspectModal({ data, onClose }: { data: Objeto; onClose: () => void }) 
       >
         fechar
       </button>
+    </ModalShell>
+  );
+}
+
+// EDUCATIONAL: linha de dado com label + valor + hint educacional. Reuso interno do InspectModal.
+function InspectField({
+  icon, label, value, hint, valueColor,
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  value: string;
+  hint: string;
+  valueColor?: string;
+}) {
+  return (
+    <div className="px-3 py-2 grid grid-cols-[80px_1fr] sm:grid-cols-[100px_1fr] gap-2 items-baseline text-[11px] font-mono">
+      <div className="flex items-center gap-1.5 text-slate-500 shrink-0">
+        {icon}
+        <span>{label}</span>
+      </div>
+      <div className="min-w-0">
+        <div className="text-slate-100 font-bold" style={valueColor ? { color: valueColor } : undefined}>
+          {value}
+        </div>
+        <div className="text-[10px] text-slate-500 leading-snug mt-0.5">{hint}</div>
+      </div>
+    </div>
+  );
+}
+
+// EDUCATIONAL: portrait SVG do NPC — espelha o sprite procedural do canvas
+// (corpo + cabeça + chapéu opcional), só que pixel-perfeito em SVG pro modal.
+function NpcPortrait({
+  shirt, hat, size = 96,
+}: {
+  shirt: [number, number, number];
+  hat: [number, number, number] | null;
+  size?: number;
+}) {
+  const rgbStr = (c: [number, number, number]) => `rgb(${c[0]},${c[1]},${c[2]})`;
+  return (
+    <svg viewBox="-15 -20 30 38" width={size} height={size}>
+      {/* sombra */}
+      <ellipse cx="0" cy="14" rx="7" ry="2" fill="rgba(0,0,0,0.45)" />
+      {/* pernas */}
+      <rect x="-4" y="6" width="3" height="6" rx="1" fill="rgb(15,23,42)" />
+      <rect x="1" y="6" width="3" height="6" rx="1" fill="rgb(15,23,42)" />
+      {/* corpo */}
+      <rect x="-6" y="-2" width="12" height="9" rx="2" fill={rgbStr(shirt)} />
+      {/* cabeça */}
+      <rect x="-4" y="-10" width="8" height="7" rx="1.5" fill="rgb(252,211,170)" />
+      {/* olhos */}
+      <rect x="-3" y="-8" width="1.4" height="0.8" fill="rgb(15,23,42)" />
+      <rect x="2" y="-8" width="1.4" height="0.8" fill="rgb(15,23,42)" />
+      {/* chapéu opcional */}
+      {hat && <rect x="-5" y="-13" width="10" height="4" rx="2" fill={rgbStr(hat)} />}
+    </svg>
+  );
+}
+
+const NPC_ROLE_DESC: Record<string, { tagline: string; theme: 'cyan' | 'violet' | 'amber' | 'rose' | 'emerald' }> = {
+  'DBA': { tagline: 'Database Administrator — schemas, índices, queries pesadas', theme: 'violet' },
+  'SecOps': { tagline: 'Security Ops — defende contra injection, leaks, brute-force', theme: 'rose' },
+  'Cloud': { tagline: 'Cloud Engineer — AWS, RDS, deploy, escalabilidade', theme: 'cyan' },
+  'Engineer': { tagline: 'Software Engineer — escreve o código que vira CRUD', theme: 'amber' },
+  'Backend': { tagline: 'Backend Dev — APIs HTTP, lógica de negócio, validação', theme: 'emerald' },
+  'Architect': { tagline: 'System Architect — desenha como o sistema escala', theme: 'violet' },
+  'SQL Wizard': { tagline: 'SQL Specialist — sabe cada canto obscuro do SELECT', theme: 'amber' },
+  'DevOps': { tagline: 'DevOps Engineer — pipelines, monitoring, deploys', theme: 'cyan' },
+};
+
+// EDUCATIONAL: hook de tipografia animada (typewriter). Char-by-char, com skip.
+// Reseta automaticamente quando o `text` muda (ex: usuário clica "próxima dica").
+function useTypewriter(text: string, speed = 18) {
+  const [shown, setShown] = useState('');
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    setShown('');
+    setDone(false);
+    if (!text) {
+      setDone(true);
+      return;
+    }
+    let i = 0;
+    const interval = setInterval(() => {
+      i++;
+      setShown(text.slice(0, i));
+      if (i >= text.length) {
+        clearInterval(interval);
+        setDone(true);
+      }
+    }, speed);
+    return () => clearInterval(interval);
+  }, [text, speed]);
+
+  const skip = useCallback(() => {
+    setShown(text);
+    setDone(true);
+  }, [text]);
+
+  return { shown, done, skip };
+}
+
+// EDUCATIONAL: modal aberto quando jogador faz INSPECT (atalho 4) num NPC,
+// ou tenta BUILD em cima de um. Mostra portrait + role + curiosidade rotativa
+// com animação de tipografia (estilo "diálogo de RPG") e detalhe expandido.
+function NpcModal({ data, onClose }: { data: NpcPreset; onClose: () => void }) {
+  const [idx, setIdx] = useState(0);
+  const total = data.curiosities.length;
+  const cur = data.curiosities[idx];
+  const meta = NPC_ROLE_DESC[data.role] || { tagline: '', theme: 'cyan' as const };
+  const cm = COLOR_MAP[meta.theme];
+  const { shown: shownShort, done: doneShort, skip } = useTypewriter(cur.short, 16);
+
+  const next = () => setIdx((i) => (i + 1) % total);
+  const prev = () => setIdx((i) => (i - 1 + total) % total);
+
+  return (
+    <ModalShell>
+      <div className="flex items-center gap-3 mb-4">
+        <div className={`w-9 h-9 rounded-lg ${cm.bg} ${cm.ring} border ${cm.fg} flex items-center justify-center font-mono font-bold`}>
+          NPC
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className={`font-mono text-base ${cm.fg} truncate`}>{data.role}</h2>
+          <p className="text-[11px] text-slate-400 font-mono leading-tight">{meta.tagline}</p>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-slate-500 hover:text-slate-200 p-1 rounded shrink-0"
+          aria-label="fechar"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Portrait + dialog box estilo RPG */}
+      <div className={`rounded-xl border ${cm.ring} bg-gradient-to-br from-slate-950/80 to-slate-900/40 p-4 mb-3 flex items-start gap-4`}>
+        <div className={`shrink-0 rounded-lg ${cm.bg} p-2 shadow-[0_0_30px_rgba(34,211,238,0.15)]`}>
+          <NpcPortrait shirt={data.shirt} hat={data.hat} size={88} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">
+            <span className={`w-1.5 h-1.5 rounded-full ${cm.bg.replace('/10', '/80')} animate-pulse`} />
+            falando agora · {idx + 1}/{total}
+          </div>
+          {/* Caixa de diálogo com tipografia animada — clique pra skip pro fim */}
+          <div
+            onClick={!doneShort ? skip : undefined}
+            className={`text-slate-100 text-sm leading-relaxed font-mono ${!doneShort ? 'cursor-pointer' : ''}`}
+            title={!doneShort ? 'clique pra revelar tudo' : ''}
+          >
+            {shownShort}
+            {!doneShort && (
+              <span className={`inline-block w-1.5 h-3.5 ml-0.5 align-middle ${cm.bg.replace('/10', '/70')} animate-pulse`} />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Detalhe — só aparece após terminar de digitar a frase curta. Fade-in suave. */}
+      <motion.div
+        initial={false}
+        animate={{ opacity: doneShort ? 1 : 0, height: doneShort ? 'auto' : 0 }}
+        transition={{ duration: 0.25 }}
+        className="overflow-hidden mb-3"
+      >
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-3">
+          <div className="text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1.5">
+            entender melhor
+          </div>
+          <p className="text-[12px] text-slate-300 leading-relaxed">
+            {cur.detail}
+          </p>
+        </div>
+      </motion.div>
+
+      {/* Outras dicas que esse NPC sabe — clica pra pular */}
+      <div className="mb-4">
+        <div className="text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1.5">
+          outras dicas de {data.role.toLowerCase()}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {data.curiosities.map((_, i) => (
+            <button
+              key={i}
+              onClick={() => setIdx(i)}
+              className={`text-[10px] font-mono w-7 h-7 rounded border transition-colors ${
+                i === idx
+                  ? `${cm.ring} ${cm.bg} ${cm.fg}`
+                  : 'border-white/10 bg-white/[0.03] text-slate-500 hover:text-slate-200 hover:border-white/30'
+              }`}
+            >
+              {i + 1}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={prev}
+          className="px-3 py-2 rounded-lg border border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.06] font-mono text-xs"
+        >
+          ← anterior
+        </button>
+        <button
+          onClick={next}
+          className={`flex-1 px-3 py-2 rounded-lg border ${cm.ring} ${cm.bg} ${cm.fg} hover:bg-white/[0.06] font-mono text-xs flex items-center justify-center gap-2`}
+        >
+          próxima dica →
+        </button>
+        <button
+          onClick={onClose}
+          className="px-3 py-2 rounded-lg text-slate-400 hover:text-slate-200 font-mono text-xs"
+        >
+          fechar
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+// EDUCATIONAL: PropModal — modal pra itens decorativos do mapa (árvore, café, estante,
+// servidor, papagaio, fonte). Estrutura igual ao NpcModal mas portrait é o emoji do prop
+// num círculo grande, sem precisar de SVG procedural.
+function PropModal({ data, onClose }: { data: PropPreset; onClose: () => void }) {
+  const [idx, setIdx] = useState(0);
+  const total = data.curiosities.length;
+  const cur = data.curiosities[idx];
+  const cm = COLOR_MAP[data.theme];
+  const { shown: shownShort, done: doneShort, skip } = useTypewriter(cur.short, 16);
+
+  const next = () => setIdx((i) => (i + 1) % total);
+  const prev = () => setIdx((i) => (i - 1 + total) % total);
+
+  return (
+    <ModalShell>
+      <div className="flex items-center gap-3 mb-4">
+        <div
+          className={`w-9 h-9 rounded-lg ${cm.bg} ${cm.ring} border ${cm.fg} flex items-center justify-center font-mono font-bold text-base`}
+        >
+          {data.emoji}
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className={`font-mono text-base ${cm.fg} truncate`}>{data.role}</h2>
+          <p className="text-[11px] text-slate-400 font-mono leading-tight">
+            item interativo do mapa · INSPECT pra ler curiosidades
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-slate-500 hover:text-slate-200 p-1 rounded shrink-0"
+          aria-label="fechar"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Hero card com emoji grande + dialog com typewriter */}
+      <div className={`rounded-xl border ${cm.ring} bg-gradient-to-br from-slate-950/80 to-slate-900/40 p-4 mb-3 flex items-start gap-4`}>
+        <div
+          className={`shrink-0 rounded-lg ${cm.bg} flex items-center justify-center text-5xl shadow-[0_0_30px_rgba(34,211,238,0.15)]`}
+          style={{ width: 88, height: 88 }}
+        >
+          {data.emoji}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">
+            <span className={`w-1.5 h-1.5 rounded-full ${cm.bg.replace('/10', '/80')} animate-pulse`} />
+            curiosidade · {idx + 1}/{total}
+          </div>
+          <div
+            onClick={!doneShort ? skip : undefined}
+            className={`text-slate-100 text-sm leading-relaxed font-mono ${!doneShort ? 'cursor-pointer' : ''}`}
+            title={!doneShort ? 'clique pra revelar tudo' : ''}
+          >
+            {shownShort}
+            {!doneShort && (
+              <span className={`inline-block w-1.5 h-3.5 ml-0.5 align-middle ${cm.bg.replace('/10', '/70')} animate-pulse`} />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Detalhe — fade-in suave após terminar de digitar a frase curta */}
+      <motion.div
+        initial={false}
+        animate={{ opacity: doneShort ? 1 : 0, height: doneShort ? 'auto' : 0 }}
+        transition={{ duration: 0.25 }}
+        className="overflow-hidden mb-3"
+      >
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-3">
+          <div className="text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1.5">
+            entender melhor
+          </div>
+          <p className="text-[12px] text-slate-300 leading-relaxed">
+            {cur.detail}
+          </p>
+        </div>
+      </motion.div>
+
+      {/* Pagination dots */}
+      <div className="mb-4">
+        <div className="text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1.5">
+          mais sobre {data.role.toLowerCase()}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {data.curiosities.map((_, i) => (
+            <button
+              key={i}
+              onClick={() => setIdx(i)}
+              className={`text-[10px] font-mono w-7 h-7 rounded border transition-colors ${
+                i === idx
+                  ? `${cm.ring} ${cm.bg} ${cm.fg}`
+                  : 'border-white/10 bg-white/[0.03] text-slate-500 hover:text-slate-200 hover:border-white/30'
+              }`}
+            >
+              {i + 1}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={prev}
+          className="px-3 py-2 rounded-lg border border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.06] font-mono text-xs"
+        >
+          ← anterior
+        </button>
+        <button
+          onClick={next}
+          className={`flex-1 px-3 py-2 rounded-lg border ${cm.ring} ${cm.bg} ${cm.fg} hover:bg-white/[0.06] font-mono text-xs flex items-center justify-center gap-2`}
+        >
+          próxima →
+        </button>
+        <button
+          onClick={onClose}
+          className="px-3 py-2 rounded-lg text-slate-400 hover:text-slate-200 font-mono text-xs"
+        >
+          fechar
+        </button>
+      </div>
     </ModalShell>
   );
 }
@@ -315,11 +783,11 @@ function NameStep({
       <div className="flex flex-col items-center text-center mb-4">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src="/favicon.ico"
+          src="/logo.png"
           alt="CRUD Dungeon"
           width={180}
           height={180}
-          className="rounded-2xl mb-3 shadow-[0_0_60px_rgba(34,211,238,0.4)] ring-2 ring-cyan-400/30"
+          className="rounded-2xl mb-3 shadow-[0_0_60px_rgba(34,211,238,0.4)] ring-2 ring-cyan-400/30 object-contain bg-slate-950/40"
         />
         <div className="flex items-center gap-3 -mt-2">
           <PlayerPreview custom={custom} />
@@ -645,71 +1113,6 @@ function SqlPreviewBar({ tool, tipo, facing, target }: SqlPreviewBarProps) {
 }
 
 // ============================================================================
-// Toolbar com tooltips educacionais
-// ============================================================================
-interface ToolbarProps {
-  tipo: Tipo; setTipo: (t: Tipo) => void;
-  tool: Tool; setTool: (t: Tool) => void;
-}
-
-function Toolbar({ tipo, setTipo, tool, setTool }: ToolbarProps) {
-  return (
-    <div className="flex flex-wrap gap-2 items-center justify-center text-xs font-mono">
-      <div className="flex items-center gap-1 glass rounded-lg p-1">
-        <span className="px-2 py-1 text-slate-500 text-[10px]">TIPO</span>
-        {(Object.keys(TIPO_META) as Tipo[]).map((id) => {
-          const meta = TIPO_META[id];
-          const Icon = meta.icon;
-          const active = tipo === id;
-          const cm = COLOR_MAP[id === 'servidor' ? 'cyan' : id === 'banco' ? 'violet' : id === 'cache' ? 'amber' : 'emerald'];
-          return (
-            <motion.button
-              key={id}
-              onClick={() => setTipo(id)}
-              whileHover={{ scale: 1.06 }}
-              whileTap={{ scale: 0.94 }}
-              title={`Tipo de objeto a criar: ${meta.label}`}
-              className={`px-2 py-1 rounded-md flex items-center gap-1 border transition-colors ${active ? `${cm.ring} ${cm.bg} ${cm.fg}` : 'border-transparent text-slate-400 hover:text-slate-200'
-                }`}
-            >
-              <Icon className="w-3 h-3" />
-              <span className="hidden sm:inline">{id}</span>
-            </motion.button>
-          );
-        })}
-      </div>
-      <div className="flex items-center gap-1 glass rounded-lg p-1">
-        <span className="px-2 py-1 text-slate-500 text-[10px]">TOOL</span>
-        {(Object.keys(TOOL_META) as Tool[]).map((id, i) => {
-          const meta = TOOL_META[id];
-          const Icon = meta.icon;
-          const active = tool === id;
-          const cm = COLOR_MAP[meta.color];
-          const shortcut = i + 1;
-          return (
-            <motion.button
-              key={id}
-              onClick={() => setTool(id)}
-              whileHover={{ scale: 1.06 }}
-              whileTap={{ scale: 0.94 }}
-              title={`${meta.hint} → ${meta.verb} ${meta.sqlKeyword}  ·  atalho: ${shortcut}`}
-              className={`relative px-2 py-1 rounded-md flex items-center gap-1 border transition-colors ${active ? `${cm.ring} ${cm.bg} ${cm.fg}` : 'border-transparent text-slate-400 hover:text-slate-200'
-                }`}
-            >
-              <Icon className="w-3 h-3" />
-              {meta.label}
-              <kbd className={`hidden sm:inline-block ml-1 px-1 text-[9px] rounded ${active ? 'bg-white/10' : 'bg-white/5'} text-slate-400`}>
-                {shortcut}
-              </kbd>
-            </motion.button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================================
 // D-Pad mobile
 // ============================================================================
 interface DpadBtnProps { children: React.ReactNode; onClick: () => void; className?: string }
@@ -807,7 +1210,7 @@ export default function GameEngine() {
     objetos: [],
     tipo: 'servidor',
     tool: 'build',
-    facing: { x: 5, y: 9 },
+    facing: { x: SPAWN_X, y: SPAWN_Y },
     custom: { shirt: 'teal', hat: 'cyan', skin: 'tan' },
   });
   const cbRef = useRef<{
@@ -828,12 +1231,12 @@ export default function GameEngine() {
   // EDUCATIONAL: tool/tipo agora vêm do store (header também os controla).
   const tipo = useGameStore((s: any) => s.tipo as Tipo);
   const tool = useGameStore((s: any) => s.tool as Tool);
-  const setTipo = useGameStore((s: any) => s.setTipo as (t: Tipo) => void);
+  // setTipo é usado pelo HeaderActionBar; aqui só lemos.
   const setTool = useGameStore((s: any) => s.setTool as (t: Tool) => void);
   const setFps = useGameStore((s: any) => s.setFps as (n: number) => void);
 
   const [ready, setReady] = useState(false);
-  const [facing, setFacing] = useState<FacingTile>({ x: 5, y: 9 });
+  const [facing, setFacing] = useState<FacingTile>({ x: SPAWN_X, y: SPAWN_Y });
 
   useObjetos();
   // EDUCATIONAL: hooks vêm de queries.js (JS). TS infere `void` por falta de
@@ -846,16 +1249,20 @@ export default function GameEngine() {
 
   // EDUCATIONAL: dados do INSPECT (modal). Quando preenchido, mostra a casa lida.
   const [inspectData, setInspectData] = useState<Objeto | null>(null);
+  // INSPECT em NPC abre modal específico (curiosidade + portrait).
+  const [npcModalData, setNpcModalData] = useState<NpcPreset | null>(null);
+  // INSPECT em prop (árvore, café, estante, etc) abre PropModal.
+  const [propModalData, setPropModalData] = useState<PropPreset | null>(null);
   // Quiz pós-tutorial (1 vez na vida).
   const [quizOpen, setQuizOpen] = useState(false);
 
-  // Carrega nome + progresso do tutorial + customização do localStorage.
+  // Carrega nome + progresso do tutorial + customização do sessionStorage.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      const savedName = localStorage.getItem(USER_NAME_KEY);
-      const tutDone = localStorage.getItem(TUTORIAL_DONE_KEY) === '1';
-      const savedCustom = localStorage.getItem(PLAYER_CUSTOM_KEY);
+      const savedName = sessionStorage.getItem(USER_NAME_KEY);
+      const tutDone = sessionStorage.getItem(TUTORIAL_DONE_KEY) === '1';
+      const savedCustom = sessionStorage.getItem(PLAYER_CUSTOM_KEY);
       if (savedCustom) {
         try { setPlayerCustom(JSON.parse(savedCustom)); } catch { }
       }
@@ -868,8 +1275,8 @@ export default function GameEngine() {
 
   const onNameSubmit = useCallback((name: string, custom: PlayerCustom) => {
     try {
-      localStorage.setItem(USER_NAME_KEY, name);
-      localStorage.setItem(PLAYER_CUSTOM_KEY, JSON.stringify(custom));
+      sessionStorage.setItem(USER_NAME_KEY, name);
+      sessionStorage.setItem(PLAYER_CUSTOM_KEY, JSON.stringify(custom));
     } catch { }
     setUserName(name);
     setPlayerCustom(custom);
@@ -878,8 +1285,8 @@ export default function GameEngine() {
 
   const onSkipAll = useCallback(() => {
     try {
-      localStorage.setItem(USER_NAME_KEY, 'jogador');
-      localStorage.setItem(TUTORIAL_DONE_KEY, '1');
+      sessionStorage.setItem(USER_NAME_KEY, 'jogador');
+      sessionStorage.setItem(TUTORIAL_DONE_KEY, '1');
     } catch { }
     setUserName('jogador');
     setTutorialStep('off');
@@ -888,9 +1295,21 @@ export default function GameEngine() {
   const startTutorial = useCallback(() => setTutorialStep('move'), [setTutorialStep]);
 
   const finishTutorial = useCallback(() => {
-    try { localStorage.setItem(TUTORIAL_DONE_KEY, '1'); } catch { }
+    try { sessionStorage.setItem(TUTORIAL_DONE_KEY, '1'); } catch { }
     setTutorialStep('off');
   }, [setTutorialStep]);
+
+  // EDUCATIONAL: kaplay escuta input no canvas. Quando modal abre, foco vai pro
+  // botão do modal — kaplay fica "surdo". Ao fechar, devolvemos o foco pro canvas
+  // pra WASD/setas voltarem a funcionar sem precisar clicar no jogo.
+  const refocusCanvas = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+      canvasRef.current?.focus();
+    });
+  }, []);
 
   // EDUCATIONAL: assim que chega em 'done', marca o tutorial como concluído E
   // dispara o quiz (1× — gated por QUIZ_DONE_KEY). NÃO usamos cleanup com clearTimeout
@@ -899,10 +1318,10 @@ export default function GameEngine() {
   const quizScheduledRef = useRef(false);
   useEffect(() => {
     if (tutorialStep === 'done') {
-      try { localStorage.setItem(TUTORIAL_DONE_KEY, '1'); } catch { }
+      try { sessionStorage.setItem(TUTORIAL_DONE_KEY, '1'); } catch { }
       if (quizScheduledRef.current) return;
       try {
-        const quizDone = localStorage.getItem(QUIZ_DONE_KEY) === '1';
+        const quizDone = sessionStorage.getItem(QUIZ_DONE_KEY) === '1';
         if (!quizDone) {
           quizScheduledRef.current = true;
           // pequeno delay para o usuário ler o "Mestre do CRUD" antes do quiz
@@ -951,7 +1370,7 @@ export default function GameEngine() {
   const target: Objeto | null = objetos.find((o: Objeto) => o.pos_x === facing.x && o.pos_y === facing.y) ?? null;
 
   // facing → React state, com batch via rAF para evitar re-render por frame
-  const facingRef = useRef<FacingTile>({ x: 5, y: 9 });
+  const facingRef = useRef<FacingTile>({ x: SPAWN_X, y: SPAWN_Y });
   const setFacingDeferred = useCallback((f: FacingTile) => {
     requestAnimationFrame(() => setFacing(f));
   }, []);
@@ -1007,12 +1426,19 @@ export default function GameEngine() {
               spawnSqlBubble(kRef.current, `nivel max`, obj.pos_x, obj.pos_y, [167, 139, 250]);
               spawnFloatingText(kRef.current, `máx (3)`, obj.pos_x, obj.pos_y - 1, [167, 139, 250], 10);
             } else {
+              // EDUCATIONAL: feedback de level-up bem mais dramático. O usuário precisa
+              // VER que a casa evoluiu — antes era sutil e dava impressão de "não rolou".
               spawnSqlBubble(kRef.current, `level=${nextLevel}`, obj.pos_x, obj.pos_y, [251, 191, 36]);
-              spawnFloatingText(kRef.current, `nv ${fromLevel} → ${nextLevel}`, obj.pos_x, obj.pos_y - 1, [251, 191, 36], 10);
+              spawnFloatingText(kRef.current, `LEVEL UP! nv ${fromLevel} → ${nextLevel}`, obj.pos_x, obj.pos_y - 1, [251, 191, 36], 12);
               spawnLevelUpStars(kRef.current, obj.pos_x * TILE + TILE / 2, obj.pos_y * TILE + TILE / 2, [251, 191, 36]);
+              // Flash dourado piscando + onda concêntrica
+              flashTile(kRef.current, obj.pos_x, obj.pos_y, [253, 224, 71]);
+              spawnUpdateRing(kRef.current, obj.pos_x * TILE + TILE / 2, obj.pos_y * TILE + TILE / 2);
+              // Camada extra de partículas douradas
+              spawnLevelUpBurst(kRef.current, obj.pos_x * TILE + TILE / 2, obj.pos_y * TILE + TILE / 2);
               const p = kRef.current?.__player;
               if (p) spawnPlayerActionSpeech(kRef.current, 'update', p.pos.x, p.pos.y);
-              cameraShake(kRef.current, 1.2, 0.15);
+              cameraShake(kRef.current, 2.5, 0.22);
             }
             advanceIf('update', 'delete');
           },
@@ -1087,6 +1513,10 @@ export default function GameEngine() {
       kRef.current = k;
       const K_ = k as K;
 
+      // EDUCATIONAL: zoom da câmera. Sprites parecem maiores; área visível encolhe.
+      // Mais imersivo + sprites pixel-art ficam legíveis.
+      try { K_.setCamScale?.(CAM_SCALE); } catch { /* fallback: sem zoom, ainda funciona */ }
+
       // EDUCATIONAL: pré-carrega os 3 sprites de casa (níveis 1/2/3).
       // loadSprite é assíncrono — esperamos antes de spawnar qualquer obj-node,
       // senão drawSprite('casa1') falha em silêncio até o asset chegar.
@@ -1108,8 +1538,34 @@ export default function GameEngine() {
 
       // EDUCATIONAL: NPC ambiente ("data clerk") + signs interativas dão vida ao mapa,
       // sem competir com o gameplay. Tudo procedural, sem assets externos.
-      spawnNpcs(K_);
-      spawnSigns(K_);
+      // npcMap: tile-key → fn de fala (usada pelo INSPECT).
+      // signTiles: Set de tile-keys (NPCs e signs bloqueiam movimento + BUILD).
+      const npcMap = spawnNpcs(K_);
+      const signTiles = spawnSigns(K_);
+      const propsMap = spawnProps(K_);
+      // Cachorro errante perto do spawn — anda a cada 3-6s.
+      // Não bloqueia tiles (player atravessa, é fofo). INSPECT abre carinho.
+      const dogNode = spawnDog(K_, SPAWN_X - 3, SPAWN_Y + 1);
+      // Estações de PC ambiente — decoração + NPC sentado codando.
+      spawnPcStations(K_);
+      const tileBlocked = (x: number, y: number): boolean => {
+        const key = `${x},${y}`;
+        return npcMap.has(key) || signTiles.has(key) || propsMap.has(key);
+      };
+
+      // EDUCATIONAL: data packets viajam entre NPCs aleatórios a cada ~5s.
+      // Sugere "rede ativa" — o cenário fica vivo sem competir com gameplay.
+      const npcCenters = NPC_PRESETS.map((n) => ({
+        x: n.tileX * TILE + TILE / 2,
+        y: n.tileY * TILE + TILE / 2,
+      }));
+      K_.loop(4.5, () => {
+        if (npcCenters.length < 2) return;
+        const a = npcCenters[Math.floor(Math.random() * npcCenters.length)];
+        let b = npcCenters[Math.floor(Math.random() * npcCenters.length)];
+        if (b === a) b = npcCenters[(npcCenters.indexOf(a) + 1) % npcCenters.length];
+        spawnDataPacketBeam(K_, a.x, a.y, b.x, b.y);
+      });
 
       // Partículas ambiente — pontos lentos como pacotes de dados
       spawnAmbientParticles(K_);
@@ -1119,14 +1575,14 @@ export default function GameEngine() {
       // Quando o jogador interage, action vira o tipo da ação por X segundos
       // e o draw reflete (martelando, deletando, comemorando).
       const player = K_.add([
-        K_.pos(5 * TILE + TILE / 2, 9 * TILE + TILE / 2),
+        K_.pos(SPAWN_X * TILE + TILE / 2, SPAWN_Y * TILE + TILE / 2),
         K_.anchor('center'),
-        K_.scale(1.5),
+        K_.scale(1.7),
         K_.z(5),
         {
-          targetPos: K_.vec2(5 * TILE + TILE / 2, 9 * TILE + TILE / 2),
-          tileX: 5,
-          tileY: 9,
+          targetPos: K_.vec2(SPAWN_X * TILE + TILE / 2, SPAWN_Y * TILE + TILE / 2),
+          tileX: SPAWN_X,
+          tileY: SPAWN_Y,
           dir: 'down' as Direction,
           frame: 0,
           frameTime: 0,
@@ -1179,7 +1635,7 @@ export default function GameEngine() {
             stateRef.current.facing = { x: fx, y: fy };
           },
           draw() {
-            drawDevopsSprite(K_, this.frame, this.dir, this.bobble, stateRef.current.custom, this.action, this.actionT, this.happyT);
+            drawDevopsSprite(K_, this.frame, this.dir, this.bobble, stateRef.current.custom, this.action, this.actionT, this.happyT, stateRef.current.tool);
           },
         },
       ]);
@@ -1246,8 +1702,11 @@ export default function GameEngine() {
 
       // Sincronização de objetos
       const objNodes = new Map<string | number, K>();
-      const syncObjects = () => {
-        const objs = stateRef.current.objetos;
+      // EDUCATIONAL: recebe `objs` direto do subscriber (state fresco). Se lesse de
+      // stateRef.current.objetos aqui, ficaria 1 render atrasado — bug clássico de
+      // off-by-one que fazia level 2 mostrar sprite do nv1, level 3 mostrar do nv2.
+      // stateRef só é atualizado pelo useEffect que roda DEPOIS do commit do React.
+      const syncObjects = (objs: Objeto[]) => {
         const ids = new Set(objs.map((o) => o.id));
 
         // EDUCATIONAL: pass 1 — remove o que sumiu. MAS: se sumiu um id "tmp-..."
@@ -1291,24 +1750,25 @@ export default function GameEngine() {
           }
         }
       };
-      let lastObjs = stateRef.current.objetos;
+      let lastObjs = useGameStore.getState().objetos;
       const unsub = useGameStore.subscribe((state: { objetos: Objeto[] }) => {
         const next = state.objetos;
         if (next !== lastObjs) {
           lastObjs = next;
-          syncObjects();
+          syncObjects(next);
         }
       });
-      syncObjects();
+      syncObjects(lastObjs);
 
-      // Câmera segue o player com smooth-follow
-      // EDUCATIONAL: kaplay 3001+ usa getCamPos / setCamPos (camPos() está deprecado).
+      // Câmera segue o player com smooth-follow.
+      // EDUCATIONAL: com camScale > 1, a área VISÍVEL em world space = canvas / scale.
+      // Por isso o clamp usa halfW/halfH ajustados (senão veríamos vazio na borda).
       K_.onUpdate(() => {
         const cur = K_.getCamPos();
         const cx = K_.lerp(cur.x, player.pos.x, 0.06);
         const cy = K_.lerp(cur.y, player.pos.y, 0.06);
-        const halfW = K_.width() / 2;
-        const halfH = K_.height() / 2;
+        const halfW = (K_.width() / 2) / CAM_SCALE;
+        const halfH = (K_.height() / 2) / CAM_SCALE;
         K_.setCamPos(K_.vec2(
           Math.max(halfW, Math.min(W - halfW, cx)),
           Math.max(halfH, Math.min(H - halfH, cy))
@@ -1328,7 +1788,8 @@ export default function GameEngine() {
         const dy = dir === 'down' ? 1 : dir === 'up' ? -1 : 0;
         const nx = Math.max(0, Math.min(COLS - 1, player.tileX + dx));
         const ny = Math.max(0, Math.min(ROWS - 1, player.tileY + dy));
-        if (tileOcupado(nx, ny)) {
+        // EDUCATIONAL: NPCs e signs também bloqueiam o passo do player.
+        if (tileOcupado(nx, ny) || tileBlocked(nx, ny)) {
           player.moving = true;
           return;
         }
@@ -1349,11 +1810,66 @@ export default function GameEngine() {
         player.actionT = 0;
       };
 
+      // EDUCATIONAL: cooldown forte contra auto-repeat + race da optimistic update.
+      // 400ms é largo o bastante pra propagar React state entre presses, mas curto
+      // pra não atrapalhar o jogo (jogador consegue fazer 2.5 ações/seg).
+      let lastInteractAt = 0;
       const interact = () => {
+        const now = performance.now();
+        if (now - lastInteractAt < 400) return;
+        lastInteractAt = now;
         const f = stateRef.current.facing;
         const obj = tileOcupado(f.x, f.y);
         const t = stateRef.current.tool;
         if (!obj) {
+          // EDUCATIONAL: tile sem casa. Pode ter NPC, prop (item), dog, sign, ou vazio.
+          const npc = npcMap.get(`${f.x},${f.y}`);
+          const prop = propsMap.get(`${f.x},${f.y}`);
+          const dogHere = dogNode && dogNode.tileX === f.x && dogNode.tileY === f.y;
+
+          // 1) Dog: INSPECT faz carinho (latido real + corações + rabo abana + bubble).
+          if (dogHere && t === 'inspect') {
+            sfx.dogBark();
+            spawnReadWaves(K_, dogNode.pos.x, dogNode.pos.y);
+            spawnPetHearts(K_, dogNode.pos.x, dogNode.pos.y);
+            spawnTalkBubble(K_, 'au au! 🐾', dogNode.pos.x, dogNode.pos.y - 18, [254, 205, 211]);
+            dogNode.pettedT = 2.0; // pausa errância por 2s + anima rabo mais
+            return;
+          }
+          // 2) NPC: INSPECT abre modal com curiosidades.
+          if (npc && t === 'inspect') {
+            flashTile(K_, f.x, f.y, [34, 211, 238]);
+            spawnReadWaves(K_, f.x * TILE + TILE / 2, f.y * TILE + TILE / 2);
+            sfx.read();
+            setNpcModalData(npc);
+            return;
+          }
+          // 3) Prop: INSPECT abre PropModal com curiosidades temáticas.
+          if (prop && t === 'inspect') {
+            flashTile(K_, f.x, f.y, [34, 211, 238]);
+            spawnReadWaves(K_, f.x * TILE + TILE / 2, f.y * TILE + TILE / 2);
+            sfx.read();
+            setPropModalData(prop);
+            return;
+          }
+          // 4) BUILD num NPC mostra modal (entender porque bloqueia).
+          if (npc && t === 'build') {
+            sfx.blocked();
+            setNpcModalData(npc);
+            return;
+          }
+          // 5) BUILD num prop também mostra modal didático.
+          if (prop && t === 'build') {
+            sfx.blocked();
+            setPropModalData(prop);
+            return;
+          }
+          // 6) Bloqueado por sign/dog/qualquer outro = som mudo.
+          if (tileBlocked(f.x, f.y) || dogHere) {
+            sfx.blocked();
+            return;
+          }
+          // 7) Tile genuinamente vazio: BUILD constrói; outras tools no-op.
           if (t === 'build') {
             spawnCreateParticles(K_, f.x * TILE + TILE / 2, f.y * TILE + TILE / 2);
             flashTile(K_, f.x, f.y, [16, 185, 129]);
@@ -1398,14 +1914,24 @@ export default function GameEngine() {
       K_.onKeyPress(['down', 's'], () => tryMove('down'));
       K_.onKeyPress(['left', 'a'], () => tryMove('left'));
       K_.onKeyPress(['right', 'd'], () => tryMove('right'));
-      K_.onKeyPress(['space', 'enter'], interact);
 
-      // Repetição quando segura
-      let repeatTimer = 0;
+      // EDUCATIONAL: Espaço/Enter usam edge-detection manual (frame-a-frame).
+      // O onKeyPress do kaplay 3001 às vezes refire em auto-repeat do browser
+      // (keydown repete a 30Hz quando segura). Aqui só dispara quando vai de
+      // SOLTO → APERTADO, garantindo 1 ação por toque físico.
+      let spaceWasDown = false;
+      let moveRepeatTimer = 0;
       K_.onUpdate(() => {
-        repeatTimer += K_.dt();
-        if (repeatTimer < 0.16) return;
-        repeatTimer = 0;
+        const isSpaceDown = K_.isKeyDown('space') || K_.isKeyDown('enter');
+        if (isSpaceDown && !spaceWasDown) {
+          interact();
+        }
+        spaceWasDown = isSpaceDown;
+
+        // Repetição de movimento (segurar WASD) — 1 tile a cada 160ms.
+        moveRepeatTimer += K_.dt();
+        if (moveRepeatTimer < 0.16) return;
+        moveRepeatTimer = 0;
         if (K_.isKeyDown('up') || K_.isKeyDown('w')) tryMove('up');
         else if (K_.isKeyDown('down') || K_.isKeyDown('s')) tryMove('down');
         else if (K_.isKeyDown('left') || K_.isKeyDown('a')) tryMove('left');
@@ -1456,7 +1982,8 @@ export default function GameEngine() {
             ref={canvasRef}
             width={W}
             height={H}
-            className="block max-w-full max-h-full rounded-xl border border-cyan-400/15 shadow-[0_20px_80px_rgba(34,211,238,0.08)] bg-[#080e1c] touch-none select-none"
+            tabIndex={0}
+            className="block max-w-full max-h-full rounded-xl border border-cyan-400/15 shadow-[0_20px_80px_rgba(34,211,238,0.08)] bg-[#080e1c] touch-none select-none focus:outline-none"
             style={{ aspectRatio: `${COLS}/${ROWS}`, width: 'auto', height: 'auto' }}
           />
           {/* vinheta sutil */}
@@ -1489,11 +2016,11 @@ export default function GameEngine() {
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-xl bg-slate-900/80">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="/favicon.ico"
+                src="/logo.png"
                 alt="CRUD Dungeon"
-                width={64}
-                height={64}
-                className="rounded-xl animate-pulse shadow-[0_0_40px_rgba(34,211,238,0.4)]"
+                width={72}
+                height={72}
+                className="rounded-xl animate-pulse shadow-[0_0_40px_rgba(34,211,238,0.4)] object-contain"
               />
               <div className="font-mono text-cyan-400 text-sm">inicializando engine...</div>
             </div>
@@ -1518,14 +2045,32 @@ export default function GameEngine() {
           <IntroStep key="intro" name={userName} onClose={startTutorial} />
         )}
         {inspectData && (
-          <InspectModal key="inspect" data={inspectData} onClose={() => setInspectData(null)} />
+          <InspectModal
+            key="inspect"
+            data={inspectData}
+            onClose={() => { setInspectData(null); refocusCanvas(); }}
+          />
+        )}
+        {npcModalData && (
+          <NpcModal
+            key="npc"
+            data={npcModalData}
+            onClose={() => { setNpcModalData(null); refocusCanvas(); }}
+          />
+        )}
+        {propModalData && (
+          <PropModal
+            key="prop"
+            data={propModalData}
+            onClose={() => { setPropModalData(null); refocusCanvas(); }}
+          />
         )}
       </AnimatePresence>
 
       <QuizModal
         open={quizOpen}
         name={userName}
-        onClose={() => setQuizOpen(false)}
+        onClose={() => { setQuizOpen(false); refocusCanvas(); }}
       />
     </div>
   );
@@ -1538,7 +2083,7 @@ function drawDataCenterFloor(k: K) {
   // EDUCATIONAL: floor coeso "data center / dungeon". Cores fixas, sem biomas aleatórios.
   // Estrutura:
   //   - base escura uniforme com checkerboard sutil
-  //   - 2 paths luminosos (vertical + horizontal) cruzando no spawn (5,9)
+  //   - 2 paths luminosos (vertical + horizontal) cruzando no spawn (SPAWN_X, SPAWN_Y)
   //   - bordas com "tijolos" pronunciados
   //   - decorações pontuais (não em paths) representam "objetos do data center"
   const rand = (x: number, y: number) => {
@@ -1546,9 +2091,9 @@ function drawDataCenterFloor(k: K) {
     return ((s % 1000) + 1000) % 1000 / 1000;
   };
 
-  // Path coordinates — cruzam no spawn (5,9) pra orientar o jogador.
-  const isHPath = (y: number) => y === 9;       // corredor horizontal
-  const isVPath = (x: number) => x === 5;       // corredor vertical
+  // Path coordinates — cruzam no spawn pra orientar o jogador.
+  const isHPath = (y: number) => y === SPAWN_Y; // corredor horizontal
+  const isVPath = (x: number) => x === SPAWN_X; // corredor vertical
   const onPath = (x: number, y: number) => isHPath(y) || isVPath(x);
 
   for (let y = 0; y < ROWS; y++) {
@@ -1851,9 +2396,41 @@ function spawnAmbientParticle(k: K) {
 // ===== Player (DevOps) =====
 type PlayerAction = 'idle' | 'build' | 'update' | 'delete' | 'happy';
 
+// EDUCATIONAL: ícone da ferramenta atual na mão direita do player.
+// Sempre visível em idle, ajuda o jogador a saber QUAL operação vai disparar.
+function drawToolInHand(k: K, tool: Tool, x: number, y: number) {
+  if (tool === 'build') {
+    // Martelo de construção: cabo marrom + cabeça cinza
+    k.drawRect({ pos: k.vec2(x - 2, y - 2), width: 5, height: 3, color: k.rgb(120, 120, 130), radius: 0.5 });
+    k.drawRect({ pos: k.vec2(x + 0.2, y + 1), width: 1.2, height: 4, color: k.rgb(101, 67, 33) });
+  } else if (tool === 'upgrade') {
+    // Martelo dourado: cabo âmbar + cabeça dourada com brilho
+    k.drawRect({ pos: k.vec2(x - 2, y - 2), width: 5, height: 3, color: k.rgb(251, 191, 36), radius: 0.5 });
+    k.drawRect({ pos: k.vec2(x + 0.2, y + 1), width: 1.2, height: 4, color: k.rgb(180, 130, 40) });
+    // glint
+    k.drawRect({ pos: k.vec2(x - 1.4, y - 1.6), width: 1.2, height: 0.6, color: k.rgb(254, 240, 138), opacity: 0.85 });
+  } else if (tool === 'delete') {
+    // Bomba: esfera escura + pavio + faísca
+    k.drawCircle({ pos: k.vec2(x + 0.5, y + 1), radius: 2.4, color: k.rgb(28, 28, 38) });
+    k.drawCircle({ pos: k.vec2(x + 0.5, y + 1), radius: 2.4, fill: false, outline: { width: 0.6, color: k.rgb(244, 63, 94) } });
+    // pavio
+    k.drawRect({ pos: k.vec2(x + 0.2, y - 2), width: 0.8, height: 1.6, color: k.rgb(101, 67, 33) });
+    // faísca pulsando levemente
+    const sparkSize = 0.7 + 0.3 * Math.abs(Math.sin(k.time() * 8));
+    k.drawCircle({ pos: k.vec2(x + 0.6, y - 2.4), radius: sparkSize, color: k.rgb(244, 63, 94) });
+  } else if (tool === 'inspect') {
+    // Lupa: aro cyan vazio + cabo marrom diagonal
+    k.drawCircle({ pos: k.vec2(x, y), radius: 2.2, fill: false, outline: { width: 0.8, color: k.rgb(34, 211, 238) } });
+    k.drawCircle({ pos: k.vec2(x, y), radius: 1.8, color: k.rgb(34, 211, 238), opacity: 0.18 });
+    // cabo
+    k.drawRect({ pos: k.vec2(x + 1.6, y + 1.6), width: 2.4, height: 0.9, color: k.rgb(101, 67, 33), radius: 0.4 });
+  }
+}
+
 function drawDevopsSprite(
   k: K, frame: number, dir: Direction, bobble: number, custom: PlayerCustom,
   action: PlayerAction = 'idle', actionT: number = 0, happyT: number = 0,
+  tool: Tool = 'build',
 ) {
   // EDUCATIONAL: sprite procedural com 5 modos de ação. Cores customizáveis.
   const shirt = PLAYER_PRESETS.shirt[custom.shirt];
@@ -1905,11 +2482,15 @@ function drawDevopsSprite(
     width: 3, height: 8, color: k.rgb(...shirt.rgb), radius: 1,
   });
 
-  // martelo na mão direita quando build
+  // martelo na mão direita quando build em ação (animação grande do swing)
   if (action === 'build' && buildPhase > 0.2) {
     const hammerY = -2 + bob - armRaise - 4;
     k.drawRect({ pos: k.vec2(5, hammerY), width: 5, height: 4, color: k.rgb(120, 120, 130), radius: 1 });
     k.drawRect({ pos: k.vec2(7, hammerY + 4), width: 1.5, height: 5, color: k.rgb(101, 67, 33) });
+  } else if (action === 'idle') {
+    // EDUCATIONAL: ferramenta na mão direita reflete `tool` selecionada.
+    // Hammer / Hammer dourado / Bomba / Lupa — referência visual contínua.
+    drawToolInHand(k, tool, 7 + updateVib, 2 + bob);
   }
 
   // cabeça
@@ -2053,6 +2634,65 @@ function spawnFloatingText(k: K, label: string, tileX: number, tileY: number, rg
   txt.scale = k.vec2(0.5, 0.5);
   k.tween(0.5, 1.15, 0.18, (v: number) => (txt.scale = k.vec2(v, v)), k.easings.easeOutBack);
   k.wait(0.18, () => k.tween(1.15, 1, 0.12, (v: number) => (txt.scale = k.vec2(v, v))));
+}
+
+// EDUCATIONAL: corações flutuantes saindo do dog quando recebe carinho.
+// Visual de "amor" — corações rosados subindo + dispersando.
+function spawnPetHearts(k: K, x: number, y: number) {
+  for (let i = 0; i < 8; i++) {
+    const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.2;
+    const speed = 35 + Math.random() * 30;
+    const heartSize = 2 + Math.random() * 1.5;
+    const drift = (Math.random() - 0.5) * 30;
+    const heart = k.add([
+      k.rect(heartSize, heartSize, { radius: heartSize / 3 }),
+      k.pos(x + (Math.random() - 0.5) * 12, y - 8),
+      k.color(244, 63, 94),
+      k.opacity(1),
+      k.move(k.vec2(Math.cos(angle), Math.sin(angle)), speed),
+      k.lifespan(1.4, { fade: 1.0 }),
+      k.z(8),
+      { driftX: drift, t: 0 },
+    ]);
+    heart.onUpdate(() => {
+      heart.t += k.dt();
+      heart.pos.x += Math.sin(heart.t * 6) * heart.driftX * k.dt() * 0.3;
+    });
+  }
+}
+
+// EDUCATIONAL: explosão dourada — partículas saindo do centro pra fora.
+// Usado em level-up junto com as estrelas e o ring pra dar peso visual.
+function spawnLevelUpBurst(k: K, x: number, y: number) {
+  for (let i = 0; i < 22; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 90 + Math.random() * 110;
+    const isGold = Math.random() < 0.65;
+    const c: [number, number, number] = isGold ? [253, 224, 71] : [251, 191, 36];
+    const p = k.add([
+      k.circle(1.5 + Math.random() * 2),
+      k.pos(x, y),
+      k.color(...c),
+      k.opacity(1),
+      k.move(k.vec2(Math.cos(angle), Math.sin(angle)), speed),
+      k.lifespan(0.7, { fade: 0.5 }),
+      k.z(4),
+    ]);
+    p.onUpdate(() => { p.opacity = Math.max(0, p.opacity - k.dt() * 1.4); });
+  }
+  // halo expandindo
+  const halo = k.add([
+    k.circle(8),
+    k.pos(x, y),
+    k.color(253, 224, 71),
+    k.opacity(0.55),
+    k.outline(2, k.rgb(254, 240, 138)),
+    k.scale(0.4),
+    k.anchor('center'),
+    k.lifespan(0.55, { fade: 0.4 }),
+    k.z(3),
+  ]);
+  k.tween(0.4, 3.2, 0.5, (v: number) => (halo.scale = k.vec2(v, v)), k.easings.easeOutQuad);
 }
 
 // EDUCATIONAL: estrelas rotantes ao redor do objeto — efeito level-up.
@@ -2306,38 +2946,382 @@ function spawnSqlBubble(k: K | null, label: string, tileX: number, tileY: number
   bubble.onUpdate(() => { bubble.opacity = Math.max(0, bubble.opacity - k.dt() * 0.55); });
 }
 
+// EDUCATIONAL: pacote de dados viajando entre dois pontos. Visual "rede ativa".
+// Disparado em loop a cada ~5s entre 2 NPCs aleatórios pelo init do GameEngine.
+function spawnDataPacketBeam(k: K, x1: number, y1: number, x2: number, y2: number) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const dist = Math.hypot(dx, dy);
+  const speed = 220; // px/s
+  const dur = Math.max(0.3, dist / speed);
+  const colors: Array<[number, number, number]> = [
+    [34, 211, 238], [167, 139, 250], [16, 185, 129], [251, 191, 36],
+  ];
+  const c = colors[Math.floor(Math.random() * colors.length)];
+  // halo de partida
+  k.add([
+    k.circle(4),
+    k.pos(x1, y1),
+    k.color(...c),
+    k.opacity(0.7),
+    k.lifespan(0.4, { fade: 0.3 }),
+    k.z(2),
+  ]);
+  // pacote em si
+  const packet = k.add([
+    k.circle(2.5),
+    k.pos(x1, y1),
+    k.color(...c),
+    k.opacity(0.95),
+    k.outline(1, k.rgb(255, 255, 255)),
+    k.lifespan(dur + 0.1, { fade: 0 }),
+    k.z(3),
+    {
+      vx: dx / dur,
+      vy: dy / dur,
+      update() {
+        this.pos.x += this.vx * k.dt();
+        this.pos.y += this.vy * k.dt();
+      },
+    },
+  ]);
+  // trail: deixa pequenas circles que somem
+  let trailT = 0;
+  packet.onUpdate(() => {
+    trailT += k.dt();
+    if (trailT > 0.04) {
+      trailT = 0;
+      k.add([
+        k.circle(1.6),
+        k.pos(packet.pos.x, packet.pos.y),
+        k.color(...c),
+        k.opacity(0.55),
+        k.lifespan(0.4, { fade: 0.3 }),
+        k.z(2),
+      ]);
+    }
+  });
+  // pulso de chegada
+  k.wait(dur, () => {
+    k.add([
+      k.circle(3),
+      k.pos(x2, y2),
+      k.color(...c),
+      k.opacity(0.8),
+      k.outline(1, k.rgb(...c)),
+      k.lifespan(0.5, { fade: 0.4 }),
+      k.scale(1),
+      k.z(2),
+    ]);
+  });
+}
+
 // ============================================================================
-// NPCs ambiente — dão vida ao mapa sem competir com gameplay.
+// NPCs ambiente — dão vida ao mapa, soltam quotes idle e curiosidades no INSPECT.
 // ============================================================================
-const NPC_PRESETS: Array<{
+// EDUCATIONAL: cada curiosidade tem 2 camadas — short (headline 1 linha, animada com
+// typewriter no modal) e detail (parágrafo explicativo, aparece embaixo após digitação).
+// Conteúdo extraído da lista das 100 curiosidades AWS+SQL, mapeado por tema do role.
+type Curiosity = { short: string; detail: string };
+
+type NpcPreset = {
   tileX: number; tileY: number;
   shirt: [number, number, number];
   hat: [number, number, number] | null;
-  quotes: string[];
-}> = [
+  role: string;
+  quotes: string[];          // idle (no canvas, bubble curta)
+  curiosities: Curiosity[];  // INSPECT (modal, com tipografia animada)
+};
+
+const NPC_PRESETS: NpcPreset[] = [
   {
-    tileX: 2, tileY: 2,
+    tileX: 2, tileY: 2, role: 'DBA',
     shirt: [167, 139, 250], hat: [251, 191, 36],
-    quotes: ['SELECT *... 🥱', 'CRUD = vida', 'cafézinho?'],
+    quotes: [
+      'Minha vida é baseada em ACID: Atomicidade, Consistência, Isolamento e Durabilidade.',
+      'Índices salvam vidas (e a performance do banco).',
+      'Normalização é a arte de não repetir a mesma coisa dez vezes.',
+      'GROUP BY: unindo o que o caos separou.',
+    ],
+    curiosities: [
+      {
+        short: 'WHERE filtra: sem ele, UPDATE/DELETE acerta a tabela TODA',
+        detail: 'Sem WHERE, o banco aplica em TODAS as linhas. UPDATE users SET active=false sem WHERE? Deslogou todo mundo. DELETE sem WHERE? Não tem lixeira — recovery via backup, se houver. Em produção, isso já demitiu muita gente.',
+      },
+      {
+        short: 'INDEX em col WHERE = SELECT até 100× mais rápido',
+        detail: 'Sem índice, o banco lê a tabela inteira (full table scan). Com índice, vai direto pra linha via B-tree. Mas índice tem custo: cada INSERT/UPDATE precisa atualizar o índice também — então crie só nas colunas que você filtra/ordena de verdade.',
+      },
+      {
+        short: 'ACID: Atomic · Consistent · Isolated · Durable',
+        detail: 'Atomic: tudo ou nada, sem meio-caminho. Consistent: regras (NOT NULL, FK, etc) nunca são violadas. Isolated: transações concorrentes não veem o meio uma da outra. Durable: depois do COMMIT, os dados sobrevivem mesmo se o servidor cair imediatamente.',
+      },
+      {
+        short: 'PRIMARY KEY é UNIQUE + NOT NULL automático',
+        detail: 'PK identifica unicamente uma linha. Pode ser id sintético (AUTO_INCREMENT) ou natural (cpf, email). Cada tabela tem no máximo 1 PK. Outras colunas únicas usam UNIQUE constraint. PK ganha índice grátis.',
+      },
+      {
+        short: 'GROUP BY agrupa · HAVING filtra grupos · ORDER BY ordena',
+        detail: 'WHERE filtra antes de agrupar; HAVING filtra depois. Ex: SELECT cidade, COUNT(*) FROM users GROUP BY cidade HAVING COUNT(*) > 100 — só cidades com mais de 100 usuários. ORDER BY no final.',
+      },
+      {
+        short: 'normalização evita redundância · desnormaliza só pra performance',
+        detail: 'Normalizar = quebrar dados em tabelas pequenas conectadas via FK. Evita "endereço do user repetido em N pedidos". Mas JOINs custam — em apps de leitura pesada, desnormalize pontualmente (dado duplicado mas leitura rápida).',
+      },
+    ],
   },
   {
-    tileX: COLS - 3, tileY: 2,
+    tileX: COLS - 3, tileY: 2, role: 'SecOps',
     shirt: [225, 29, 72], hat: [16, 185, 129],
-    quotes: ['cuidado co/ DELETE', 'sempre c/ WHERE', 'já comitou hoje?'],
+    quotes: [
+      'SQL Injection não é vacina, cuidado com seus inputs!',
+      'IAM: Quem é você e o que pensa que está acessando?',
+      'Não esqueça o WHERE no seu DELETE, ou o RH te deleta!',
+    ],
+    curiosities: [
+      {
+        short: 'SQL injection já roubou bancos inteiros — use prepared statements',
+        detail: 'Concatenar input em query é catastrófico: WHERE id = ${input} pode virar 1; DROP TABLE users. Use placeholders: query("WHERE id = ?", [input]) — o driver escapa caracteres perigosos por você. mysql2 e quase todos os SDKs suportam.',
+      },
+      {
+        short: 'CSRF token previne POST forjado de outro site',
+        detail: 'Sem CSRF token, um site malicioso pode fazer seu navegador postar em outro app onde você está logado (ataque de Cross-Site Request Forgery). O token é um valor único por sessão que o servidor exige nas mutações — request de outro site não tem como adivinhar.',
+      },
+      {
+        short: 'rate-limit por IP barra 99% dos brute-force',
+        detail: 'Limite a quantidade de requests por IP por minuto. 5 logins falhados em 60s? Bloqueia 10 min. 100 GETs por segundo? Throttle. Não impede ataque distribuído (DDoS), mas barra script kiddie e bot trivial.',
+      },
+      {
+        short: 'TLS criptografa a query no caminho até o RDS',
+        detail: 'Sem TLS, qualquer um na rede vê suas queries (e senhas). Com TLS, é túnel cifrado entre browser/server e DB. AWS RDS usa TLS por padrão; o cert vai num bundle (rds-global-bundle.pem) que o driver valida.',
+      },
+      {
+        short: 'AWS Shield protege contra ataques DDoS',
+        detail: 'Shield Standard é grátis e bloqueia ataques comuns automaticamente na borda da AWS. Shield Advanced (~$3k/mês) tem proteção contra ataques de aplicação e crédito de bill em caso de spike. SYN flood, UDP flood etc são barrados sem você fazer nada.',
+      },
+      {
+        short: 'AWS Secrets Manager guarda credenciais com rotação automática',
+        detail: 'Não hardcode senha no código nem no .env commitado. Secrets Manager guarda criptografado, rotaciona automaticamente (ex: troca senha do RDS toda semana), e os apps puxam via IAM. Sem chave em config = sem leak por descuido.',
+      },
+    ],
   },
   {
-    tileX: 2, tileY: ROWS - 3,
+    tileX: 2, tileY: ROWS - 3, role: 'Cloud',
     shirt: [4, 120, 87], hat: [34, 211, 238],
-    quotes: ['AWS = nuvem 🇺🇸', 'RDS é DB gerenciado', 'TLS protege a query'],
+    quotes: [
+      'A nuvem nada mais é do que o computador de outra pessoa.',
+      'S3: O balde que nunca transborda (mas a conta cresce).',
+      'Minha EC2 está mais lenta que segunda-feira de manhã.',
+      'Região vs. Zona de Disponibilidade: redundância nunca é demais.',
+    ],
+    curiosities: [
+      {
+        short: 'AWS RDS = MySQL gerenciado: backup/patch/replica automáticos',
+        detail: 'Você não precisa instalar MySQL nem administrar SO. RDS faz: backup diário (até 35 dias de retenção), patch de segurança, replica de leitura, failover Multi-AZ. Você foca em queries; AWS cuida do servidor.',
+      },
+      {
+        short: 'Aurora é fork do MySQL pela Amazon, até 5× mais rápido',
+        detail: 'Aurora reescreve o storage engine pra usar 6 cópias replicadas em 3 AZs. Replicação é quase instantânea (~10ms). Suporta serverless v2 (escala em segundos). Custa um pouco mais que RDS MySQL, mas vale a pena pra workload sério.',
+      },
+      {
+        short: 'Multi-AZ replica DB em 2+ datacenters (uptime 99.99%)',
+        detail: 'Multi-AZ mantém uma cópia standby num AZ diferente. Se o AZ primário cai (raio cai no datacenter, sério), failover automático em <60s. Você paga ~2× pelo storage, mas o app não percebe a queda.',
+      },
+      {
+        short: 'EC2 = servidor virtual sob demanda (pay-per-second)',
+        detail: 'EC2 é VM na nuvem. Você escolhe CPU/RAM/disco, dá boot, paga só pelo tempo ligado. t3.micro custa ~$8/mês 24/7. Spot Instances chegam a 90% off — mas a AWS pode tomar de volta com 2 min de aviso.',
+      },
+      {
+        short: 'CloudFront reduz latência globalmente via cache de borda',
+        detail: 'CloudFront é a CDN da AWS. Sua imagem/HTML/JSON vai pra ~400 pontos de presença pelo mundo. User no Japão pega do servidor no Japão, não da Virginia. Cache de borda + TLS termination + DDoS protection juntos.',
+      },
+      {
+        short: 'Região da AWS em São Paulo (sa-east-1) tem 3 AZs',
+        detail: 'A AWS tem regiões pelo mundo, cada uma com 2-6 AZs (datacenters fisicamente separados). sa-east-1 fica em SP. Latência pra SP é ~5ms; pra Virginia, ~120ms. Use a região mais próxima dos usuários.',
+      },
+    ],
   },
   {
-    tileX: COLS - 3, tileY: ROWS - 3,
+    tileX: COLS - 3, tileY: ROWS - 3, role: 'Engineer',
     shirt: [194, 65, 12], hat: null,
-    quotes: ['UPGRADE evolui 🏠', 'level cap = 3', 'INSERT no spawn?'],
+    quotes: [
+      'Você é o PRIMARY KEY do meu coração: único e indispensável.',
+      'COMMIT ou ROLLBACK? Eis a questão.',
+      'DROP TABLE problemas; — Quem dera fosse assim, né?',
+    ],
+    curiosities: [
+      {
+        short: 'AUTO_INCREMENT gera ids únicos sequenciais — não reusa apagados',
+        detail: 'Você apaga id=5? O próximo INSERT pega 6, não 5. Isso evita confusão (id 5 não "volta a ser" outra coisa amanhã). Em sistema distribuído, AUTO_INCREMENT vira UUID — ids únicos sem coordenação central.',
+      },
+      {
+        short: 'JOIN une tabelas via FK — evita duplicar dados',
+        detail: 'Se cada pedido tem nome+endereço do cliente, você duplica nos N pedidos. Normalize: tabela users (id, nome), tabela orders (id, user_id FK). JOIN une no SELECT: SELECT * FROM orders JOIN users ON orders.user_id = users.id.',
+      },
+      {
+        short: 'transaction = grupo de queries atômico (tudo ou nada)',
+        detail: 'BEGIN; UPDATE conta SET saldo = saldo - 100 WHERE id = 1; UPDATE conta SET saldo = saldo + 100 WHERE id = 2; COMMIT; — se a 2ª falhar, ROLLBACK desfaz a 1ª. Sem transação, dinheiro evaporava no meio.',
+      },
+      {
+        short: 'INSERT cria · UPDATE altera · DELETE remove · SELECT lê',
+        detail: 'São os 4 verbos do SQL DML. Em REST: POST=INSERT, GET=SELECT, PUT/PATCH=UPDATE, DELETE=DELETE. Esse mapeamento é a base de qualquer app web — você acabou de aprender o esqueleto de 90% dos sistemas comerciais.',
+      },
+      {
+        short: 'NOT NULL + DEFAULT garante linhas sempre íntegras',
+        detail: 'Coluna NOT NULL não aceita valor ausente. DEFAULT preenche se não der valor. Ex: created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP — toda linha tem hora de criação automática, sem precisar enviar do app.',
+      },
+      {
+        short: 'DELETE sem WHERE remove TUDO (perigo 😅)',
+        detail: 'DELETE FROM users; apaga TODA a tabela. Sem confirmação, sem lixeira. Em prod, SEMPRE faça SELECT antes pra ver o que vai sumir. Ou abra transação: BEGIN; DELETE...; verifica COUNT; COMMIT ou ROLLBACK.',
+      },
+    ],
+  },
+  {
+    tileX: 10, tileY: 4, role: 'Backend',
+    shirt: [15, 118, 110], hat: [167, 139, 250],
+    quotes: [
+      'Lambda: Por que pagar por um servidor se você só precisa de uma função?',
+      'Route 53: O GPS que leva seus pacotes para o lugar certo.',
+      'O CloudFront entrega rápido, só não entrega a sua felicidade.',
+    ],
+    curiosities: [
+      {
+        short: 'POST cria · PUT idempotente · PATCH parcial · DELETE remove',
+        detail: 'POST: cria recurso novo (chamar 2× cria 2). PUT: substitui inteiro de forma idempotente (chamar 2× = mesmo estado final). PATCH: altera campos. Idempotência importa pra retry seguro em rede flaky — POST não pode ser retry-ado às cegas.',
+      },
+      {
+        short: 'HTTP 200 OK · 201 Created · 204 No Content · 404 Not Found',
+        detail: '200=sucesso com body. 201=POST criou. 204=sucesso sem body (ex: DELETE OK). 4xx=cliente errou. 5xx=server errou. Use os certos: cliente trata diferente cada faixa. Anti-pattern: 200 com {error: "..."} no corpo.',
+      },
+      {
+        short: 'optimistic update mostra UI antes do server confirmar',
+        detail: 'Em vez de esperar a request voltar, atualiza a UI imediatamente (assumindo sucesso). Se der erro, reverte. Sensação de instantâneo. React Query faz isso com onMutate — esse jogo aplica em CREATE/UPDATE/DELETE.',
+      },
+      {
+        short: 'AWS Lambda executa código sem servidor (serverless)',
+        detail: 'Você sobe uma função (Node/Python/etc), AWS roda quando tem evento (HTTP, S3, SQS, agendamento). Cobra por ms de execução. Cold start: primeira chamada após inatividade leva 100-500ms. Bom pra batch/event-driven; ruim pra request síncrono crítico.',
+      },
+      {
+        short: 'cache invalidation é o problema mais difícil em CS',
+        detail: 'Quote famoso: "There are only two hard things in computer science: cache invalidation and naming things." — Phil Karlton. Cachear é fácil. Saber QUANDO invalidar (sem servir dado velho nem invalidar demais) é arte.',
+      },
+      {
+        short: 'API REST usa URLs como recursos: /users/42/orders/100',
+        detail: 'Recursos hierárquicos. /users (lista), /users/42 (um user), /users/42/orders (orders desse user). Verbo HTTP define ação (GET/POST/PUT/DELETE). É a convenção que fez REST dominar (vs SOAP, RPC).',
+      },
+    ],
+  },
+  {
+    tileX: 18, tileY: 4, role: 'Architect',
+    shirt: [67, 56, 202], hat: [244, 63, 94],
+    quotes: [
+      'No mundo NoSQL, o esquema é não ter esquema.',
+      'Auto Scaling é tipo mágica: cresce quando precisa e some quando não tem ninguém.',
+      'DynamoDB: Rápido, escalável e às vezes imprevisível.',
+    ],
+    curiosities: [
+      {
+        short: 'CAP: Consistency, Availability, Partition tolerance — escolha 2',
+        detail: 'Em sistema distribuído com partição de rede, você não pode ter consistência forte E disponibilidade simultaneamente. SQL clássico (RDBMS) = CP (consistente, mas indisponível durante particionamento). DynamoDB = AP (sempre disponível, eventualmente consistente).',
+      },
+      {
+        short: '90% das apps são CRUD com lógica de negócio em cima',
+        detail: 'A maioria dos apps são: tela de listagem, criar, editar, apagar. As regras de negócio (preço com desconto, validação, fluxo de aprovação) ficam nessa camada acima. Domine CRUD e você cobre 90% das vagas backend.',
+      },
+      {
+        short: 'read-replica escala leitura · sharding escala escrita',
+        detail: 'Replicas de leitura aceitam SELECT (eventualmente consistentes). Escrita continua no master. Pra escalar escrita: sharding (particiona por user_id, região, etc). Sharding é caro de implementar — adia o máximo possível, otimize antes.',
+      },
+      {
+        short: 'eventual consistency: rápido mas pode mostrar dado velho',
+        detail: 'Sistemas como DynamoDB priorizam disponibilidade. Você grava em SP, lê em VA, e pode ver versão velha por alguns ms. OK pra timeline de feed; ruim pra saldo bancário (use consistent read aí).',
+      },
+      {
+        short: 'Auto Scaling ajusta capacidade automaticamente',
+        detail: 'Você define: CPU > 70% por 5 min → adiciona 2 instâncias. CPU < 30% → remove. Reage a tráfego sem você apertar botão. Funciona com EC2, ECS, Lambda concorrência, RDS read replicas.',
+      },
+      {
+        short: 'Pareto: 80% do impacto vem de 20% das mudanças',
+        detail: 'Em performance, a maior query lenta domina o tempo total. Em features, 20% das telas têm 80% do uso. Otimize o que importa — métricas reais, não palpite. "Premature optimization is the root of all evil" — Knuth.',
+      },
+    ],
+  },
+  {
+    tileX: 8, tileY: 16, role: 'SQL Wizard',
+    shirt: [180, 83, 9], hat: [251, 191, 36],
+    quotes: [
+      'SELECT café FROM cozinha WHERE energia < 10;',
+      'Um JOIN mal feito e o processador chora...',
+    ],
+    curiosities: [
+      {
+        short: 'EXPLAIN mostra como o DB planeja executar sua query',
+        detail: 'EXPLAIN SELECT * FROM users WHERE email = "x"; mostra: usa índice? full scan? estimativa de linhas? Custo? É a ferramenta nº 1 pra debugar query lenta. EXPLAIN ANALYZE roda de fato e mede tempo real.',
+      },
+      {
+        short: 'LIMIT 1 + ORDER BY id DESC pega a última linha',
+        detail: 'Sem ORDER BY, LIMIT escolhe ARBITRÁRIO — pode trazer qualquer uma. Com ORDER BY, ordena e pega N. Pra performance: ORDER BY na coluna indexada. Sem índice, ele ordena tudo (O(n log n)).',
+      },
+      {
+        short: 'COUNT(*) pode ser lento — cache se for muito chamado',
+        detail: 'MyISAM tem contador armazenado: COUNT(*) é instantâneo. InnoDB precisa contar linha a linha respeitando MVCC: pode ser lento em tabelas grandes. Pra contagem aproximada: SHOW TABLE STATUS, ou cache com Redis.',
+      },
+      {
+        short: 'JOIN INNER · LEFT · RIGHT · FULL — diferentes seleções',
+        detail: 'INNER: só linhas com match nos dois lados. LEFT: todas da esquerda + match (NULL se não tem). RIGHT: todas da direita. FULL: todas dos dois (MySQL não suporta direto, simula com UNION).',
+      },
+      {
+        short: 'LIKE "%abc%" não usa índice — full scan pesado',
+        detail: 'Wildcard no início impede o B-tree. LIKE "abc%" usa índice (prefixo conhecido). LIKE "%abc%" (substring) não. Pra busca de texto livre: full-text index (MATCH...AGAINST) ou Elasticsearch separado.',
+      },
+      {
+        short: 'DISTINCT remove duplicados — útil pós-JOIN',
+        detail: 'Após JOIN você pode duplicar linhas (1 user com N orders → N rows do user). DISTINCT desduplica. Mas é caro: ele ordena tudo internamente. Considere reescrever com GROUP BY ou EXISTS pra evitar.',
+      },
+    ],
+  },
+  {
+    tileX: 20, tileY: 16, role: 'DevOps',
+    shirt: [4, 120, 87], hat: [34, 211, 238],
+    quotes: [
+      `Dê um 'reboot' na sua instância e reze para ela voltar.`,
+      'VPC: Criando meu próprio cercadinho digital.',
+      'O console da AWS é o maior labirinto que um dev pode enfrentar.',
+    ],
+    curiosities: [
+      {
+        short: 'observabilidade: logs (eventos) · metrics (números) · traces (caminhos)',
+        detail: 'Logs: "user 42 fez login às 10:00" — timeline de eventos. Metrics: "CPU=75%, requests=1200/min" — agregados numéricos. Traces: "request X passou por A→B→C, B levou 200ms" — pegada distribuída.',
+      },
+      {
+        short: 'CloudWatch monitora RDS · alerta se CPU > 80%',
+        detail: 'CloudWatch coleta métricas de quase tudo na AWS automaticamente. Você cria alarmes (CPU > 80% por 5 min, IOPS > 10k) que disparam SNS, SMS, Lambda, escalada. Logs também: cada log do app pode virar alarm.',
+      },
+      {
+        short: 'blue/green deploy = 2 ambientes, switcha sem downtime',
+        detail: 'Ambiente azul rodando em prod. Sobe verde (nova versão) ao lado. Smoke test no verde. Se OK, switcha o load balancer pra apontar pro verde — usuários não percebem. Se der ruim, switcha de volta. Deploy seguro.',
+      },
+      {
+        short: 'feature flag liga/desliga código sem novo deploy',
+        detail: 'Em vez de deploy pra ativar uma feature, você comita o código com if (flag.enabled). Liga/desliga via dashboard. Permite: rollout gradual (1% → 10% → 100%), A/B test, kill switch em prod sem rebuild.',
+      },
+      {
+        short: 'Infrastructure as Code (Terraform/CloudFormation) evita erros',
+        detail: 'Configurar AWS pelo console funciona pra 1 conta. Com 5 ambientes, 10 contas: chaos. IaC versiona infra como código (git). Reproduzível, peer-review, rollback. Ex: terraform apply -target=database.',
+      },
+      {
+        short: 'deploy on Friday? viver pra contar a história',
+        detail: 'Old joke: deploy de sexta = ninguém pra apagar incêndio no fim de semana. Equipes maduras: deploy contínuo (qualquer dia, várias vezes por dia, blue/green). Equipes que ainda têm dor: evitam sexta-feira.',
+      },
+    ],
   },
 ];
 
-function spawnNpcs(k: K) {
+// EDUCATIONAL: spawnNpcs retorna Map<tile, NpcPreset> consultado pelo INSPECT.
+// O INSPECT abre um MODAL (não mais bubble), passando o NpcPreset inteiro pro componente.
+// Quotes idle continuam aparecendo como bubbles curtas no canvas.
+function spawnNpcs(k: K): Map<string, NpcPreset> {
+  const map = new Map<string, NpcPreset>();
   for (const npc of NPC_PRESETS) {
     const cx = npc.tileX * TILE + TILE / 2;
     const cy = npc.tileY * TILE + TILE / 2;
@@ -2345,7 +3329,7 @@ function spawnNpcs(k: K) {
     k.add([
       k.pos(cx, cy),
       k.anchor('center'),
-      k.scale(1.1),
+      k.scale(1.5),
       k.z(4),
       'npc',
       {
@@ -2359,7 +3343,7 @@ function spawnNpcs(k: K) {
             const q = npc.quotes[Math.floor(Math.random() * npc.quotes.length)];
             spawnTalkBubble(k, q, cx, cy - 20, [220, 230, 245]);
             this.quoteT = 0;
-            this.nextAt = 12 + Math.random() * 10;
+            this.nextAt = 14 + Math.random() * 10;
           }
         },
         draw() {
@@ -2367,7 +3351,9 @@ function spawnNpcs(k: K) {
         },
       },
     ]);
+    map.set(`${npc.tileX},${npc.tileY}`, npc);
   }
+  return map;
 }
 
 function drawNpcSprite(k: K, bobble: number, shirtRgb: [number, number, number], hatRgb: [number, number, number] | null) {
@@ -2390,26 +3376,502 @@ function drawNpcSprite(k: K, bobble: number, shirtRgb: [number, number, number],
   }
 }
 
-// EDUCATIONAL: bubble estilo "balão de fala". Usado por NPCs e player idle quotes.
+// EDUCATIONAL: kaplay parseia [tag]...[/tag] como styled text. Qualquer "[" no
+// conteúdo crasha com "Styled text error: unclosed tags". Sanitizamos antes.
+function safeKaplayText(s: string): string {
+  return s.replace(/\[/g, '⟦').replace(/\]/g, '⟧');
+}
+
+// ============================================================================
+// 🌳☕📚🖥️🦜 Props interativos — itens decorativos que o INSPECT abre modal.
+// Cada um tem role + emoji + curiosidades temáticas. Bloqueiam movimento.
+// ============================================================================
+type PropKind = 'tree' | 'coffee' | 'bookshelf' | 'serverrack' | 'parrot' | 'fountain';
+
+type PropPreset = {
+  tileX: number; tileY: number;
+  kind: PropKind;
+  role: string;
+  emoji: string;
+  theme: 'cyan' | 'violet' | 'amber' | 'rose' | 'emerald';
+  curiosities: Curiosity[];
+};
+
+const PROP_PRESETS: PropPreset[] = [
+  // Árvores espalhadas
+  {
+    tileX: 6, tileY: 8, kind: 'tree', role: 'Árvore Lógica', emoji: '🌳', theme: 'emerald',
+    curiosities: [
+      { short: 'B-tree é a estrutura por trás de quase todo INDEX', detail: 'Árvore balanceada onde cada nó tem N filhos. Lookup é O(log n) — buscar entre milhões de linhas custa só ~20 saltos. MySQL InnoDB usa B+tree (variante com folhas linkadas pra range scans rápidos).' },
+      { short: 'AVL e Red-Black: árvores que se rebalanceiam sozinhas', detail: 'Sem rebalanceamento, uma árvore pode degenerar em lista (O(n)). AVL e Red-Black detectam desbalanço e rotacionam nós automaticamente. Map/Set do C++ STL usa Red-Black por baixo.' },
+      { short: 'JSON é uma árvore: objeto pai → propriedades filhas', detail: 'Toda estrutura aninhada vira árvore. {a: {b: 1}} é a raiz "a" com filho "b". Parsers fazem traversal recursivo. Árvore é o esqueleto de dado mais comum em CS depois do array.' },
+      { short: 'Trie acelera busca de prefixo (autocomplete)', detail: 'Trie ("prefix tree") guarda strings letra-por-letra. Autocomplete do Google: digita "pro", desce pela trie até "pro", lista todos os filhos. O(comprimento da palavra) — não depende do total de palavras.' },
+    ],
+  },
+  {
+    tileX: 32, tileY: 7, kind: 'tree', role: 'Árvore de Dados', emoji: '🌳', theme: 'emerald',
+    curiosities: [
+      { short: 'DOM da web é uma árvore — html → body → divs', detail: 'Todo HTML vira árvore. document.querySelector navega ela. React faz "diffing" entre 2 árvores virtuais pra saber o mínimo a re-renderizar — daí a fama de rápido.' },
+      { short: 'Heap: árvore onde pai sempre é maior (ou menor) que filhos', detail: 'Estrutura de prioridade. Inserir é O(log n), pegar o maior é O(1). Usado em algoritmos como Dijkstra (rotas mais curtas), schedulers de SO, top-K.' },
+      { short: 'Merkle tree: cada nó é hash dos filhos', detail: 'Blockchain (Bitcoin) usa pra verificar integridade. Mudou 1 byte no fundo? O hash da raiz muda. Permite provar "esse dado existe nessa árvore" só com log(n) hashes.' },
+    ],
+  },
+  // Cafeteiras
+  {
+    tileX: 14, tileY: 7, kind: 'coffee', role: 'Cafeteira do Devs', emoji: '☕', theme: 'amber',
+    curiosities: [
+      { short: 'Café é o Stack Overflow líquido — o combustível do programador.', detail: 'Pesquisa real (Stanford 2014): cafeína melhora foco em tarefas complexas em até 30%. Mas cuidado: 4 xícaras → ansiedade. 6 → tremores. Equilíbrio é a chave (igual indexação).' },
+      { short: '"It works on coffee, my computer needs RAM"', detail: 'Lema do dev. Café faz o cérebro funcionar; RAM faz o computador funcionar. Quando os dois acabam ao mesmo tempo, é hora de café e reiniciar a máquina.' },
+      { short: 'Stack Overflow tem 60M+ perguntas. Você não está sozinho.', detail: 'Provavelmente alguém já bateu o seu erro exato. Copiar resposta sem entender = bug futuro. Ler explicação + adaptar = aprendizado real. SO tem 100M visitas/mês.' },
+    ],
+  },
+  {
+    tileX: 26, tileY: 19, kind: 'coffee', role: 'Espresso de Produção', emoji: '☕', theme: 'amber',
+    curiosities: [
+      { short: 'Bug em prod às 3am? Café. Sempre café.', detail: 'Incidentes vêm em horários ruins. Runbook + monitoramento bom + café = você sobrevive. Sem runbook? Você vira o runbook (e jura nunca mais).' },
+      { short: 'Log levels: DEBUG, INFO, WARN, ERROR, FATAL', detail: 'DEBUG = só em dev. INFO = eventos normais (login, pedido). WARN = algo errado mas seguiu. ERROR = falhou mas app continua. FATAL = app vai cair. Use os certos pra alarmes funcionarem.' },
+    ],
+  },
+  // Estantes
+  {
+    tileX: 8, tileY: 20, kind: 'bookshelf', role: 'Biblioteca Clássica', emoji: '📚', theme: 'violet',
+    curiosities: [
+      { short: '"Clean Code" — Robert Martin: nomes contam tudo', detail: 'Função chamada `process()` é mistério. `parseUserOrders()` se explica. Se você precisa de comentário pra explicar o que o código faz, renomeie. Comentário fala POR QUÊ, código fala O QUÊ.' },
+      { short: '"Refactoring" — Fowler: pequenos passos seguros', detail: 'Refactor não é "vou reescrever". É: mude 1 coisa, rode os testes, commite. Repete 100×. No fim, código novo e nada quebrou. Caos é o oposto: 50 mudanças sem teste, semana de bug-hunt.' },
+      { short: '"Designing Data-Intensive Applications" é a bíblia de DB', detail: 'Martin Kleppmann explica replicação, consistência, sharding, batch vs stream. Se você for sério sobre backend/DB, leia. Cada capítulo equivale a um curso.' },
+      { short: '"Pragmatic Programmer": DRY, ortogonalidade, contratos', detail: 'DRY = Don\'t Repeat Yourself — duplicação é bug futuro. Ortogonalidade = mude 1 coisa, só 1 coisa muda. Contracts = funções têm pré/pós condições claras. Princípios que duram décadas.' },
+    ],
+  },
+  {
+    tileX: 30, tileY: 21, kind: 'bookshelf', role: 'Manuais Antigos', emoji: '📖', theme: 'violet',
+    curiosities: [
+      { short: 'RFC 793 (TCP) é de 1981 e ainda é a base da internet', detail: 'Protocolo escrito em papel há 40+ anos. TCP fornece confiabilidade sobre IP que é não-confiável. Toda chamada HTTP/HTTPS começa com TCP handshake (SYN/SYN-ACK/ACK).' },
+      { short: 'O paper original do MapReduce (Google, 2004) iniciou Big Data', detail: '"MapReduce: Simplified Data Processing on Large Clusters" — Google publicou e Hadoop nasceu. Hoje Spark e BigQuery são herdeiros. Idéia: divide trabalho em (map) e junta (reduce).' },
+      { short: 'Knuth: "Premature optimization is the root of all evil"', detail: 'Não otimize sem MEDIR. 97% do tempo, gargalo está num lugar inesperado. Profile primeiro, otimize o hotspot, deixa o resto simples. Citação é de "Structured Programming with go to" (1974).' },
+    ],
+  },
+  // Server racks decorativos (não confundir com tipo 'servidor' do CRUD)
+  {
+    tileX: 12, tileY: 21, kind: 'serverrack', role: 'Rack do Datacenter', emoji: '🖥️', theme: 'cyan',
+    curiosities: [
+      { short: 'Servidores RDS rodam em hardware compartilhado', detail: 'A AWS aluga "fatias" de máquinas físicas. Sua instância t3.micro divide CPU com vizinhos. Pra performance previsível, paga mais por dedicated instances.' },
+      { short: 'Datacenter usa ~1% da eletricidade global', detail: 'Resfriamento + servidores + redes consomem muita energia. AWS tem meta de 100% renovável até 2025. Google já é. Cada query SQL custa watts — agradeça aos engenheiros de eficiência.' },
+      { short: 'SSD vs HDD: 100× mais rápido, 10× mais caro', detail: 'HDD tem braço mecânico (5-10ms/seek). SSD é puro silício (0.1ms). DBs modernos assumem SSD. Backups arquivados ainda usam HDD por custo.' },
+    ],
+  },
+  {
+    tileX: 28, tileY: 6, kind: 'serverrack', role: 'Storage Bay', emoji: '💾', theme: 'cyan',
+    curiosities: [
+      { short: 'S3 tem 99.999999999% de durabilidade (11 noves)', detail: 'Em 10 milhões de objetos, a AWS perde estatisticamente 1 objeto a cada 10.000 anos. Replicação tripla automática + checksum. É praticamente impossível perder dado lá.' },
+      { short: '"Storage" pode ser block, object, ou file', detail: 'Block = tipo HD bruto (EBS). Object = baldes de chave/valor com metadata (S3). File = sistema de arquivos compartilhado (EFS). Cada um pra seu caso.' },
+    ],
+  },
+  // Papagaios (NPC pequeno, fala SQL)
+  {
+    tileX: 19, tileY: 5, kind: 'parrot', role: 'Papagaio de Logs', emoji: '🦜', theme: 'rose',
+    curiosities: [
+      { short: 'SELECT * é vício — peça só as colunas que precisa', detail: 'Cada coluna extra puxa bytes do disco e do network. Numa tabela com BLOB grande, SELECT * pode ser 100× mais lento que SELECT id, name. Em prod, NUNCA use SELECT *.' },
+      { short: 'JOINs sem índice na FK = full scan na tabela ligada', detail: 'JOIN orders ON orders.user_id = users.id. Se user_id não é index, o DB lê a tabela orders inteira pra cada user. CREATE INDEX idx_user ON orders(user_id) — diferença pode ser 1000×.' },
+      { short: 'NULL não é igual a NULL (tem que usar IS NULL)', detail: 'WHERE col = NULL retorna 0 linhas, mesmo que existam NULLs. SQL trata NULL como "desconhecido" — não dá pra comparar dois desconhecidos. Use IS NULL ou IS NOT NULL.' },
+      { short: 'COUNT(*) ≠ COUNT(coluna): ignoram NULLs diferente', detail: 'COUNT(*) conta linhas totais. COUNT(coluna) conta só onde coluna não é NULL. Em tabelas com NULL, dão números diferentes. Sutil mas crítico em relatórios.' },
+    ],
+  },
+  // Fonte
+  {
+    tileX: 21, tileY: 22, kind: 'fountain', role: 'Fonte de Dados', emoji: '⛲', theme: 'cyan',
+    curiosities: [
+      { short: 'Data flow: Fonte → ETL → Warehouse → Dashboard', detail: 'ETL = Extract, Transform, Load. Pega dado bruto da fonte (DB, API, CSV), transforma (limpa, agrega), carrega no warehouse (Redshift, BigQuery). Dashboard mostra. Pipeline clássico de analytics.' },
+      { short: 'Stream vs batch: tempo real vs em lotes', detail: 'Stream (Kafka, Flink): processa cada evento na hora. Batch (Spark, Airflow): processa N eventos juntos a cada hora/dia. Stream é caro mas atualizado; batch é eficiente mas atrasado.' },
+    ],
+  },
+];
+
+// EDUCATIONAL: spawnProps registra cada prop num map (tile-key → preset).
+// O INSPECT no interact() consulta esse map pra abrir o PropModal.
+function spawnProps(k: K): Map<string, PropPreset> {
+  const map = new Map<string, PropPreset>();
+  for (const p of PROP_PRESETS) {
+    const cx = p.tileX * TILE + TILE / 2;
+    const cy = p.tileY * TILE + TILE / 2;
+    k.add([
+      k.pos(cx, cy),
+      k.anchor('center'),
+      k.scale(1),
+      k.z(3),
+      'prop',
+      {
+        bobble: Math.random() * Math.PI * 2,
+        update() { this.bobble += k.dt() * 2; },
+        draw() { drawPropByKind(k, p.kind, this.bobble); },
+      },
+    ]);
+    map.set(`${p.tileX},${p.tileY}`, p);
+  }
+  return map;
+}
+
+function drawPropByKind(k: K, kind: PropKind, bobble: number) {
+  const bob = Math.sin(bobble) * 0.5;
+  if (kind === 'tree') {
+    // tronco
+    k.drawRect({ pos: k.vec2(-2, 4), width: 4, height: 8, color: k.rgb(101, 67, 33), radius: 1 });
+    // copa (3 círculos verdes empilhados)
+    k.drawCircle({ pos: k.vec2(0, -2 + bob * 0.4), radius: 8, color: k.rgb(20, 110, 50) });
+    k.drawCircle({ pos: k.vec2(-5, -3 + bob * 0.3), radius: 6, color: k.rgb(30, 130, 60) });
+    k.drawCircle({ pos: k.vec2(5, -3 + bob * 0.3), radius: 6, color: k.rgb(30, 130, 60) });
+    k.drawCircle({ pos: k.vec2(0, -8 + bob * 0.5), radius: 5, color: k.rgb(40, 150, 70) });
+    // pequenas folhas brilhantes
+    k.drawCircle({ pos: k.vec2(-3, -6 + bob), radius: 1.2, color: k.rgb(110, 231, 183), opacity: 0.8 });
+    k.drawCircle({ pos: k.vec2(3, -2 + bob), radius: 1, color: k.rgb(110, 231, 183), opacity: 0.7 });
+  } else if (kind === 'coffee') {
+    // mesinha
+    k.drawRect({ pos: k.vec2(-9, 6), width: 18, height: 3, color: k.rgb(80, 60, 40), radius: 1 });
+    // xícara (corpo + alça)
+    k.drawRect({ pos: k.vec2(-5, -3 + bob * 0.5), width: 10, height: 9, color: k.rgb(240, 240, 245), radius: 2 });
+    k.drawRect({ pos: k.vec2(5, -1 + bob * 0.5), width: 3, height: 5, color: k.rgb(240, 240, 245), radius: 2 });
+    // café preto dentro
+    k.drawRect({ pos: k.vec2(-4, -2 + bob * 0.5), width: 8, height: 2, color: k.rgb(60, 35, 15), radius: 1 });
+    // vapor (3 ondas)
+    for (let i = 0; i < 3; i++) {
+      const t = (bobble * 0.7 + i * 0.7) % 2;
+      const wx = -2 + i * 2 + Math.sin(t * Math.PI) * 1.5;
+      k.drawCircle({
+        pos: k.vec2(wx, -7 - t * 5),
+        radius: 1.2,
+        color: k.rgb(220, 220, 230),
+        opacity: Math.max(0, 1 - t / 2),
+      });
+    }
+  } else if (kind === 'bookshelf') {
+    // estante (3 prateleiras)
+    k.drawRect({ pos: k.vec2(-9, -10), width: 18, height: 22, color: k.rgb(60, 40, 25), radius: 1 });
+    // prateleiras horizontais
+    for (let i = 0; i < 3; i++) {
+      k.drawRect({ pos: k.vec2(-9, -10 + i * 7), width: 18, height: 1, color: k.rgb(40, 25, 15) });
+    }
+    // livros coloridos (4 por prateleira, cores variadas)
+    const colors: Array<[number, number, number]> = [
+      [220, 60, 60], [60, 180, 220], [220, 180, 60], [120, 60, 200], [60, 180, 100], [200, 100, 60],
+    ];
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 4; col++) {
+        const c = colors[(row * 4 + col) % colors.length];
+        k.drawRect({
+          pos: k.vec2(-8 + col * 4, -9 + row * 7),
+          width: 3.5, height: 6,
+          color: k.rgb(...c),
+          radius: 0.3,
+        });
+      }
+    }
+  } else if (kind === 'serverrack') {
+    // rack tall
+    k.drawRect({ pos: k.vec2(-7, -12), width: 14, height: 24, color: k.rgb(35, 45, 75), radius: 1 });
+    // 4 servidores empilhados
+    for (let i = 0; i < 4; i++) {
+      k.drawRect({ pos: k.vec2(-6, -11 + i * 6), width: 12, height: 4, color: k.rgb(50, 65, 110), radius: 0.5 });
+      // 3 LEDs piscando
+      for (let j = 0; j < 3; j++) {
+        const phase = bobble * 2 + i + j * 0.5;
+        const on = Math.sin(phase) > 0.2;
+        k.drawCircle({
+          pos: k.vec2(-4 + j * 1.5, -9 + i * 6),
+          radius: 0.6,
+          color: on ? k.rgb(34, 197, 94) : k.rgb(40, 50, 80),
+        });
+      }
+      // slot brilhante
+      k.drawRect({ pos: k.vec2(2, -10 + i * 6), width: 3, height: 0.5, color: k.rgb(34, 211, 238), opacity: 0.6 });
+    }
+  } else if (kind === 'parrot') {
+    // poleiro
+    k.drawRect({ pos: k.vec2(-7, 7), width: 14, height: 1.5, color: k.rgb(80, 60, 40), radius: 0.5 });
+    k.drawRect({ pos: k.vec2(-1, 8), width: 2, height: 4, color: k.rgb(80, 60, 40) });
+    // corpo (verde + amarelo)
+    k.drawRect({ pos: k.vec2(-4, -1 + bob), width: 8, height: 8, color: k.rgb(20, 130, 70), radius: 3 });
+    k.drawRect({ pos: k.vec2(-3, 2 + bob), width: 6, height: 4, color: k.rgb(220, 190, 50), radius: 2 });
+    // cabeça
+    k.drawRect({ pos: k.vec2(-3, -6 + bob), width: 6, height: 5, color: k.rgb(220, 60, 60), radius: 2 });
+    // bico
+    k.drawCircle({ pos: k.vec2(-5, -4 + bob), radius: 1.2, color: k.rgb(40, 30, 20) });
+    // olho
+    k.drawRect({ pos: k.vec2(-2, -5 + bob), width: 1, height: 1, color: k.rgb(15, 23, 42) });
+    // asa (pisca)
+    const wing = Math.sin(bobble * 3) * 0.5;
+    k.drawRect({ pos: k.vec2(0, 0 + bob + wing), width: 3, height: 5, color: k.rgb(30, 100, 50), radius: 1 });
+    // cauda
+    k.drawRect({ pos: k.vec2(2, 4 + bob), width: 5, height: 2, color: k.rgb(220, 60, 60), radius: 1 });
+  } else if (kind === 'fountain') {
+    // base
+    k.drawCircle({ pos: k.vec2(0, 4), radius: 12, color: k.rgb(60, 80, 130), opacity: 0.7 });
+    k.drawCircle({ pos: k.vec2(0, 4), radius: 12, fill: false, outline: { width: 1.5, color: k.rgb(34, 211, 238), opacity: 0.6 } });
+    // água dentro (azul claro)
+    k.drawCircle({ pos: k.vec2(0, 4), radius: 9, color: k.rgb(34, 211, 238), opacity: 0.4 });
+    // pilar central
+    k.drawRect({ pos: k.vec2(-1.5, -2), width: 3, height: 6, color: k.rgb(80, 100, 150) });
+    // jato d'água (4 partículas pulando)
+    for (let i = 0; i < 4; i++) {
+      const t = (bobble * 0.8 + i * 0.5) % 2;
+      const angle = i * Math.PI / 2;
+      const r = 4 + t * 3;
+      k.drawCircle({
+        pos: k.vec2(Math.cos(angle) * r, -4 - t * 3 + Math.sin(t * Math.PI) * 2),
+        radius: 1.3,
+        color: k.rgb(165, 243, 252),
+        opacity: Math.max(0.2, 1 - t / 2),
+      });
+    }
+    // jato vertical
+    k.drawCircle({ pos: k.vec2(0, -6 + Math.sin(bobble * 2) * 1.5), radius: 1.5, color: k.rgb(165, 243, 252), opacity: 0.85 });
+  }
+}
+
+// ============================================================================
+// 🐕 Dog NPC — pet errante perto do spawn. Wanders dentro de raio de 3 tiles,
+// muda de direção a cada 3-6s. Não bloqueia, atravessa tudo (mas evita borda).
+// ============================================================================
+function spawnDog(k: K, homeTileX: number, homeTileY: number) {
+  const startX = homeTileX * TILE + TILE / 2;
+  const startY = homeTileY * TILE + TILE / 2;
+  let elapsed = 0;
+  let nextMoveAt = 2 + Math.random() * 3;
+  let facingRight = true;
+
+  const dog = k.add([
+    k.pos(startX, startY),
+    k.anchor('center'),
+    k.scale(1.3),
+    k.z(3),
+    'dog',
+    {
+      bobble: 0,
+      moving: false,
+      tileX: homeTileX,   // exposto pra INSPECT detectar
+      tileY: homeTileY,
+      targetX: startX,
+      targetY: startY,
+      pettedT: 0,         // > 0 = recebendo carinho (rabo abana mais)
+      update() {
+        this.bobble += k.dt() * (this.moving ? 8 : 4);
+        elapsed += k.dt();
+        if (this.pettedT > 0) this.pettedT -= k.dt();
+
+        // smooth walk pra target tile
+        const dx = this.targetX - this.pos.x;
+        const dy = this.targetY - this.pos.y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq > 1) {
+          this.pos.x = k.lerp(this.pos.x, this.targetX, 0.08);
+          this.pos.y = k.lerp(this.pos.y, this.targetY, 0.08);
+          this.moving = true;
+          if (Math.abs(dx) > 0.5) facingRight = dx > 0;
+        } else {
+          this.moving = false;
+        }
+
+        // pet pausa a errância — dog fica feliz parado por 2s.
+        if (this.pettedT > 0) return;
+
+        // hora de escolher próximo tile?
+        if (elapsed >= nextMoveAt && !this.moving) {
+          elapsed = 0;
+          nextMoveAt = 3 + Math.random() * 3;
+          for (let attempt = 0; attempt < 6; attempt++) {
+            const dxT = Math.floor(Math.random() * 3) - 1;
+            const dyT = Math.floor(Math.random() * 3) - 1;
+            if (dxT === 0 && dyT === 0) continue;
+            const nx = this.tileX + dxT;
+            const ny = this.tileY + dyT;
+            if (nx < 1 || nx >= COLS - 1 || ny < 1 || ny >= ROWS - 1) continue;
+            if (Math.abs(nx - homeTileX) > 3 || Math.abs(ny - homeTileY) > 3) continue;
+            this.tileX = nx;
+            this.tileY = ny;
+            this.targetX = nx * TILE + TILE / 2;
+            this.targetY = ny * TILE + TILE / 2;
+            break;
+          }
+        }
+      },
+      draw() {
+        // quando recebendo carinho, anima rabo mais rápido + sorriso visível
+        const happyBobble = this.pettedT > 0 ? this.bobble * 2.5 : this.bobble;
+        drawDogSprite(k, happyBobble, facingRight, this.moving);
+      },
+    },
+  ]);
+  return dog;
+}
+
+function drawDogSprite(k: K, bobble: number, facingRight: boolean, moving: boolean) {
+  const bob = Math.sin(bobble) * (moving ? 0.8 : 0.4);
+  const tailWag = Math.sin(bobble * 4) * 2;
+  const sx = facingRight ? 1 : -1;
+  const flip = (x: number) => x * sx;
+
+  // sombra
+  k.drawEllipse({ pos: k.vec2(0, 7), radiusX: 6, radiusY: 1.6, color: k.rgb(0, 0, 0), opacity: 0.45 });
+
+  // patas (pequenas, alternadas se moving)
+  const legSwing = moving ? Math.sin(bobble * 6) * 1.2 : 0;
+  k.drawRect({ pos: k.vec2(flip(-4) - 1, 4 + bob + legSwing), width: 2, height: 3, color: k.rgb(140, 90, 30), radius: 0.5 });
+  k.drawRect({ pos: k.vec2(flip(2) - 1, 4 + bob - legSwing), width: 2, height: 3, color: k.rgb(140, 90, 30), radius: 0.5 });
+
+  // corpo (rect + topo arredondado)
+  k.drawRect({ pos: k.vec2(-5, -1 + bob), width: 10, height: 6, color: k.rgb(180, 130, 50), radius: 2.5 });
+  // mancha
+  k.drawCircle({ pos: k.vec2(flip(2), 1 + bob), radius: 1.4, color: k.rgb(140, 90, 30), opacity: 0.7 });
+
+  // rabo (abana mais quando parado)
+  k.drawRect({
+    pos: k.vec2(flip(5) + (sx > 0 ? 0 : -2), -2 + bob - tailWag * 0.3),
+    width: 3, height: 1.8,
+    color: k.rgb(180, 130, 50),
+    radius: 1,
+  });
+  // ponta do rabo (com wag)
+  k.drawCircle({
+    pos: k.vec2(flip(7) + tailWag * 0.5, -1 + bob - tailWag * 0.4),
+    radius: 1.2,
+    color: k.rgb(200, 150, 70),
+  });
+
+  // cabeça
+  k.drawRect({ pos: k.vec2(flip(-7) - (sx > 0 ? 0 : 1), -4 + bob), width: 5, height: 5, color: k.rgb(200, 150, 70), radius: 1.5 });
+  // orelha caída
+  k.drawRect({ pos: k.vec2(flip(-6) - (sx > 0 ? 0 : 1), -5 + bob), width: 2, height: 2.5, color: k.rgb(140, 90, 30), radius: 1 });
+  // focinho
+  k.drawCircle({ pos: k.vec2(flip(-9) + (sx > 0 ? 0 : 1), -1 + bob), radius: 0.9, color: k.rgb(40, 30, 20) });
+  // olho
+  k.drawRect({ pos: k.vec2(flip(-5) - (sx > 0 ? 0 : 1), -3 + bob), width: 1, height: 1, color: k.rgb(15, 23, 42) });
+}
+
+// ============================================================================
+// 💻 PC Stations — decoração ambiente (mesa + cadeira + monitor + NPC sentado).
+// Não bloqueiam movimento. Vida visual sem competir com gameplay.
+// ============================================================================
+const PC_STATION_POSITIONS: Array<{ tileX: number; tileY: number; theme: [number, number, number] }> = [
+  { tileX: 6, tileY: 5, theme: [34, 211, 238] },     // canto cyan
+  { tileX: COLS - 7, tileY: 5, theme: [167, 139, 250] },  // canto violet
+  { tileX: 6, tileY: ROWS - 6, theme: [16, 185, 129] },   // canto emerald
+  { tileX: COLS - 7, tileY: ROWS - 6, theme: [251, 191, 36] }, // canto âmbar
+];
+
+function spawnPcStations(k: K) {
+  for (const s of PC_STATION_POSITIONS) {
+    const cx = s.tileX * TILE + TILE / 2;
+    const cy = s.tileY * TILE + TILE / 2;
+    k.add([
+      k.pos(cx, cy),
+      k.anchor('center'),
+      k.scale(1.1),
+      k.z(3),
+      'pc-station',
+      {
+        bobble: Math.random() * Math.PI * 2,
+        typeT: Math.random() * 2,
+        update() {
+          this.bobble += k.dt() * 2.5;
+          this.typeT += k.dt();
+        },
+        draw() {
+          drawPcStation(k, this.bobble, this.typeT, s.theme);
+        },
+      },
+    ]);
+  }
+}
+
+function drawPcStation(k: K, bobble: number, typeT: number, theme: [number, number, number]) {
+  const bob = Math.sin(bobble) * 0.4;
+  // tapete
+  k.drawRect({ pos: k.vec2(-12, -10), width: 24, height: 22, color: k.rgb(40, 50, 80), opacity: 0.5, radius: 2 });
+  // mesa (base + tampo)
+  k.drawRect({ pos: k.vec2(-10, -2), width: 20, height: 2, color: k.rgb(80, 60, 40), radius: 1 });
+  k.drawRect({ pos: k.vec2(-9, 0), width: 1.5, height: 6, color: k.rgb(60, 45, 30) });
+  k.drawRect({ pos: k.vec2(7.5, 0), width: 1.5, height: 6, color: k.rgb(60, 45, 30) });
+  // monitor (atrás na mesa)
+  k.drawRect({ pos: k.vec2(-5, -10), width: 10, height: 7, color: k.rgb(20, 28, 50), radius: 1 });
+  k.drawRect({ pos: k.vec2(-4, -9), width: 8, height: 5, color: k.rgb(...theme), opacity: 0.55 });
+  // "código" no monitor — 3 linhas piscando
+  for (let i = 0; i < 3; i++) {
+    const w = 4 + Math.sin(typeT * 4 + i) * 1.5;
+    k.drawRect({
+      pos: k.vec2(-3.5, -8.5 + i * 1.4),
+      width: w,
+      height: 0.7,
+      color: k.rgb(255, 255, 255),
+      opacity: 0.6 + 0.3 * Math.abs(Math.sin(typeT * 3 + i * 1.5)),
+    });
+  }
+  // base do monitor
+  k.drawRect({ pos: k.vec2(-1.5, -3), width: 3, height: 1, color: k.rgb(40, 50, 80) });
+  // cadeira (encosto + assento)
+  k.drawRect({ pos: k.vec2(-3, 4 + bob), width: 6, height: 4, color: k.rgb(80, 30, 30), radius: 1 });
+  k.drawRect({ pos: k.vec2(-3.5, 1 + bob), width: 7, height: 3, color: k.rgb(120, 50, 50), radius: 1 });
+  // NPC sentado de costas (cabeça + ombros), digitando — bob leve
+  k.drawRect({ pos: k.vec2(-2.5, -1 + bob), width: 5, height: 4, color: k.rgb(15, 118, 110), radius: 1 });
+  k.drawRect({ pos: k.vec2(-2, -5 + bob), width: 4, height: 4, color: k.rgb(252, 211, 170), radius: 1 });
+  // capacete cyan
+  k.drawRect({ pos: k.vec2(-2.5, -7 + bob), width: 5, height: 2, color: k.rgb(...theme), radius: 1 });
+  // luz de teclado piscando (faísca)
+  if (Math.sin(typeT * 8) > 0.7) {
+    k.drawCircle({ pos: k.vec2(0, -2 + bob), radius: 0.6, color: k.rgb(...theme), opacity: 0.9 });
+  }
+}
+
+// EDUCATIONAL: bubble estilo "balão de fala" — agora com TEXT WRAP.
+// Quotes longas (frases de piada de SQL/AWS) quebram em N linhas.
+// Lifespan escalona com tamanho do texto pra dar tempo de ler.
 function spawnTalkBubble(k: K, text: string, x: number, y: number, rgb: [number, number, number]) {
-  // bg (atrás do texto, levemente arredondado)
-  const w = Math.max(20, text.length * 4 + 6);
+  const safe = safeKaplayText(text);
+  const charW = 5.2;     // largura média por caractere @ size 9
+  const lineH = 11;       // altura por linha
+  const padX = 10;
+  const padY = 8;
+  const maxBubbleW = 240;
+
+  // Largura ideal sem wrap. Se passar do max, vai wrappar.
+  const idealW = Math.round(safe.length * charW + padX);
+  const w = Math.max(40, Math.min(maxBubbleW, idealW));
+  const textW = w - padX;
+  // Estimativa de # linhas após wrap (conservadora).
+  const lines = idealW > maxBubbleW
+    ? Math.ceil((safe.length * charW) / textW)
+    : 1;
+  const h = Math.max(16, lines * lineH + padY);
+  // mais tempo na tela pra texto longo
+  const lifespan = Math.max(3.0, Math.min(6.5, 1.8 + safe.length * 0.04));
+  const fade = 1.4;
+
+  // bg
   k.add([
-    k.rect(w, 10, { radius: 3 }),
-    k.pos(x - w / 2, y - 7),
-    k.color(15, 23, 42),
-    k.opacity(0.85),
+    k.rect(w, h, { radius: 5 }),
+    k.pos(x - w / 2, y - h),
+    k.color(8, 14, 28),
+    k.opacity(0.94),
     k.outline(1, k.rgb(...rgb)),
-    k.lifespan(2.4, { fade: 1.2 }),
+    k.lifespan(lifespan, { fade }),
     k.z(7),
   ]);
+  // cauda triangular
   k.add([
-    k.text(text, { size: 6 }),
-    k.pos(x, y - 2),
-    k.anchor('center'),
+    k.rect(4, 4),
+    k.pos(x - 2, y - 2),
+    k.color(8, 14, 28),
+    k.opacity(0.94),
+    k.rotate(45),
+    k.lifespan(lifespan, { fade }),
+    k.z(6),
+  ]);
+  // Texto — passa `width` pro kaplay quebrar em N linhas. Anchor 'top' pra
+  // alinhar do topo do bg (caso tenha múltiplas linhas).
+  k.add([
+    k.text(safe, { size: 9, width: textW, lineSpacing: 2 }),
+    k.pos(x, y - h + padY / 2),
+    k.anchor('top'),
     k.color(...rgb),
     k.opacity(1),
-    k.lifespan(2.4, { fade: 1.2 }),
+    k.lifespan(lifespan, { fade }),
     k.z(8),
   ]);
 }
@@ -2424,8 +3886,10 @@ const SIGN_PRESETS: Array<{ tileX: number; tileY: number; lines: string[]; rgb: 
   { tileX: COLS - 2, tileY: ROWS - 2, lines: ['DB', 'AWS RDS'], rgb: [16, 185, 129] },
 ];
 
-function spawnSigns(k: K) {
+function spawnSigns(k: K): Set<string> {
+  const tiles = new Set<string>();
   for (const s of SIGN_PRESETS) {
+    tiles.add(`${s.tileX},${s.tileY}`);
     const cx = s.tileX * TILE + TILE / 2;
     const cy = s.tileY * TILE + TILE / 2;
     // poste
@@ -2460,6 +3924,7 @@ function spawnSigns(k: K) {
       });
     });
   }
+  return tiles;
 }
 
 // ============================================================================

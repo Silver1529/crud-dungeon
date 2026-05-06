@@ -201,7 +201,7 @@ export default function QuizModal({ open, name, onClose }) {
   };
 
   const handleClose = () => {
-    try { localStorage.setItem(QUIZ_DONE_KEY, '1'); } catch { }
+    try { sessionStorage.setItem(QUIZ_DONE_KEY, '1'); } catch { }
     onClose();
   };
 

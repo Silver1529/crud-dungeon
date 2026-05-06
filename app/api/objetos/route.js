@@ -67,6 +67,24 @@ export async function POST(req) {
   }
 
   const { tipo, pos_x, pos_y } = parsed.data;
+
+  // EDUCATIONAL: pré-check server-side de tile ocupado. Sem isso, race do cliente
+  // (otimismo + auto-repeat) pode criar 2-3 casas no mesmo tile antes do response chegar.
+  // O check aqui é a última linha de defesa antes do INSERT.
+  try {
+    const existing = await query(
+      'SELECT id FROM game_objects WHERE pos_x = :x AND pos_y = :y LIMIT 1',
+      { x: pos_x, y: pos_y }
+    );
+    if (existing.length > 0) {
+      logger.warn('tile_occupied_blocked', { requestId, pos_x, pos_y, existing_id: existing[0].id });
+      return jsonWith(requestId, { error: 'tile_occupied' }, { status: 409 });
+    }
+  } catch (err) {
+    logger.error('tile_check_failed', { requestId, ...errorFields(err) });
+    // se o check falhar, deixa o INSERT tentar (pior caso: dup que detectamos abaixo)
+  }
+
   // EDUCATIONAL: toda casa nasce nível 1 (status='novo'). Server é a fonte da verdade.
   const sql = 'INSERT INTO game_objects (tipo, status, pos_x, pos_y, level) VALUES (:tipo, :status, :x, :y, :level)';
   const params = { tipo, status: 'novo', x: pos_x, y: pos_y, level: 1 };
